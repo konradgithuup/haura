@@ -152,6 +152,11 @@ pub trait Stats: Display + Debug + serde::Serialize {
     fn removals(&self) -> u64;
 }
 
+mod cache_policy;
+mod cache_util;
 mod clock;
 mod clock_cache;
+mod hashmap_cache;
+mod lru;
+mod lru_cache;
 pub use self::clock_cache::ClockCache;

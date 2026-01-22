@@ -1,14 +1,13 @@
-//! This module provides a CLOCK cache implementation.
+//! This module provides a Hashmap-based cache.
 //!
-//! CLOCK is a more efficient implementation of Second Chance which is a 1-bit
-//! approximation of LRU.
-//! The benefit compared to LRU is the much lower overhead for cache hits
-//! as CLOCK does not have to move the cache entry to the MRU position like LRU
-//! does.
+//! The cache is initialized with an arbitrary caching policy (Clock, LRU,...).
 
 use super::{clock::Clock, AddSize, Cache, ChangeKeyError, RemoveError, Stats};
 use crate::{
-    cache::cache_util::{CacheEntry, CacheStats, PinnedEntry},
+    cache::{
+        cache_policy::CachePolicy,
+        cache_util::{CacheEntry, CacheStats, PinnedEntry},
+    },
     size::SizeMut,
 };
 use stable_deref_trait::StableDeref;
@@ -23,10 +22,10 @@ use std::{
     },
 };
 
-/// A clock cache. (1-bit approximation of LRU)
-pub struct ClockCache<K, V> {
+/// A cache based on a `std::collections::HashMap` and a given `CachePolicy`.
+pub struct HashmapCache<K, V> {
     map: HashMap<K, Arc<CacheEntry<V>>>,
-    clock: Clock<K>,
+    policy: Box<dyn for<'a> CachePolicy<K> + 'static>,
     capacity: usize,
     // Let's leak it
     size: &'static AtomicUsize,
@@ -37,12 +36,12 @@ pub struct ClockCache<K, V> {
     removals: u64,
 }
 
-impl<K: Hash + Eq, V: SizeMut> ClockCache<K, V> {
+impl<K: Hash + Eq, V: SizeMut> HashmapCache<K, V> {
     /// Returns a new cache instance with the given `capacity`.
-    pub fn new(capacity: usize) -> Self {
-        ClockCache {
+    pub fn new(cache_policy: Box<dyn CachePolicy<K>>, capacity: usize) -> Self {
+        HashmapCache {
             map: Default::default(),
-            clock: Default::default(),
+            policy: cache_policy,
             size: Box::leak(Default::default()),
             hits: Default::default(),
             misses: Default::default(),
@@ -55,7 +54,7 @@ impl<K: Hash + Eq, V: SizeMut> ClockCache<K, V> {
 }
 
 impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 'static> Cache
-    for ClockCache<K, V>
+    for HashmapCache<K, V>
 {
     type Key = K;
     type Value = V;
@@ -63,7 +62,8 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
     type Stats = CacheStats;
 
     fn new(capacity: usize) -> Self {
-        Self::new(capacity)
+        // Self::new(capacity)
+        todo!();
     }
 
     fn contains_key(&self, key: &K) -> bool {
@@ -95,7 +95,7 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
             let entry = self.map.get_mut(key).ok_or(RemoveError::NotPresent)?;
             Arc::get_mut(entry).ok_or(RemoveError::Pinned)?;
         }
-        self.clock.retain(|entry| entry != key);
+        self.policy.on_remove(key);
         let entry = self.map.remove(key).unwrap();
         let mut value = Arc::try_unwrap(entry).ok().unwrap().value;
         let size = f(&mut value);
@@ -107,7 +107,7 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
 
     fn force_remove(&mut self, key: &Self::Key, size: usize) -> bool {
         self.verify();
-        self.clock.retain(|entry| entry != key);
+        self.policy.on_remove(key);
         if self.map.remove(key).is_none() {
             return false;
         }
@@ -130,9 +130,9 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
         };
         let entry = self.map.remove(key).unwrap();
         self.map.insert(new_key.clone(), entry);
-        if let Some(entry) = self.clock.iter_mut().find(|entry| *entry == key) {
-            *entry = new_key;
-        }
+
+        self.policy.update(key, new_key);
+
         self.verify();
         Ok(())
     }
@@ -144,9 +144,9 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
             Some(entry) => entry,
         };
         self.map.insert(new_key.clone(), entry);
-        if let Some(entry) = self.clock.iter_mut().find(|entry| *entry == key) {
-            *entry = new_key;
-        }
+
+        self.policy.update(key, new_key);
+
         self.verify();
         true
     }
@@ -157,68 +157,38 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
     {
         self.verify();
 
-        let len = self.clock.len();
-        let mut cnt = 0;
-        let ret = loop {
-            let eviction_successful = {
-                let key = match self.clock.peek_front().cloned() {
-                    None => {
-                        warn!("Clock size mismatch");
-                        break None;
-                    }
-                    Some(key) => key,
-                };
-
-                let second_ref: &Self = unsafe { &*(self as *mut _) };
-                let entry = self.map.get_mut(&key).unwrap();
-
-                // An entry will be evicted if the following three conditions are satisfied:
-                // - The cache entry is not pinned
-                // - The referenced bit of the cache entry is false
-                // - The eviction callback signals a successful eviction.
-
-                if let Some(entry) = Arc::get_mut(entry) {
-                    // reset reference bit
-                    let was_referenced = *entry.referenced.get_mut();
-                    *entry.referenced.get_mut() = false;
-                    if was_referenced {
-                        None
-                    } else {
-                        f(&key, &mut entry.value, &|k| second_ref.contains_key(k))
-                    }
-                } else {
-                    None
-                }
-            };
-            if let Some(size) = eviction_successful {
-                let key = self.clock.pop_front().unwrap();
-                #[cfg(not(debug_assertions))]
-                let entry = self.map.remove(&key).unwrap();
-                #[cfg(debug_assertions)]
-                let mut entry = self.map.remove(&key).unwrap();
-
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(entry) = Arc::get_mut(&mut entry) {
-                        assert_eq!(entry.value.cache_size(), size);
-                    }
-                }
-
-                self.evictions += 1;
-                self.size.fetch_sub(size, Ordering::Relaxed);
-                let value = Arc::try_unwrap(entry).ok().unwrap().value;
-                break Some((key, value));
+        let key = match self.policy.pick_eviction_candidate().cloned() {
+            None => {
+                warn!("Unable to pick eviction candidate");
+                return None;
             }
+            Some(key) => key,
+        };
+        let eviction_successful = {
+            let second_ref: &Self = unsafe { &*(self as *mut _) };
+            let entry = self.map.get_mut(&key).unwrap();
 
-            self.clock.next();
-            cnt += 1;
-            if cnt == 2 * len {
-                warn!("Clock eviction failed");
-                break None;
+            if let Some(entry) = Arc::get_mut(entry) {
+                f(&key, &mut entry.value, &|k| second_ref.contains_key(k))
+            } else {
+                None
             }
         };
 
+        let ret = if let Some(size) = eviction_successful {
+            let value = self.map.remove(&key).unwrap();
+            let value = Arc::try_unwrap(value).ok().unwrap().value;
+            self.policy.on_remove(&key);
+
+            self.evictions += 1;
+            self.size.fetch_sub(size, Ordering::Relaxed);
+            Some((key, value))
+        } else {
+            None
+        };
+
         self.verify();
+
         ret
     }
 
@@ -233,14 +203,16 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
             }),
         );
         assert!(old_value.is_none());
-        self.clock.push_back(key);
+
+        self.policy.on_add(key);
+
         self.insertions += 1;
         self.size.fetch_add(size, Ordering::Relaxed);
     }
 
     fn stats(&self) -> Self::Stats {
         CacheStats {
-            cache_name: "Clock",
+            cache_name: self.policy.name(),
             capacity: self.capacity,
             size: self.size.load(Ordering::Relaxed),
             len: self.map.len(),
@@ -253,7 +225,7 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
     }
 
     fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a K> + 'a> {
-        Box::new(self.clock.iter())
+        Box::new(self.policy.iter())
     }
 
     fn size(&self) -> usize {
