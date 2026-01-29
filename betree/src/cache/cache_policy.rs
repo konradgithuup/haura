@@ -24,9 +24,9 @@ pub trait CachePolicy<K>: Sync + Send {
     fn pick_eviction_candidate(&self) -> Option<&K>;
 
     /// Returns an iterator over the cache entries as layed out in the cache.
-    fn iter<'a>(&self) -> impl CacheIterator<'a, K> where K: 'a;
+    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
+    where
+        K: 'a;
 }
 
-pub trait CacheIterator<'a, K: 'a + Sized>: Iterator<Item=&'a K> + Sized {
-
-}
+pub trait CacheIterator<'a, K: 'a + Sized>: Iterator<Item = &'a K> + Sized {}

@@ -157,38 +157,11 @@ pub trait Stats: Display + Debug + serde::Serialize {
 mod cache_policy;
 mod cache_util;
 mod clock;
-mod clock_cache;
+mod clock_policy;
 mod hashmap_cache;
-mod lru;
-mod lru_cache;
+mod lru_policy;
+mod test;
 use crate::cache::cache_policy::CachePolicy;
 
+pub use self::clock_policy::ClockCachePolicy;
 pub use self::hashmap_cache::HashmapCache;
-
-pub use self::clock_cache::ClockCache;
-
-
-#[cfg(test)]
-mod cache_tests {
-    use crate::size::SizeMut;
-
-    use super::*;
-
-    #[test]
-    fn test_simple_lru() {
-    }
-
-    fn test_add_one_more<P: CachePolicy<u64>>(factory: fn(usize) -> Box<P>) {
-        let cap = 5;
-
-        let policy = factory(cap);
-        let mut cache: HashmapCache<u64, (), P> = HashmapCache::new(policy, cap);
-
-        for i in 0..(cap+1) {
-            if (cache.size() >= cache.capacity()) {
-                cache.evict(f)
-            }
-            cache.insert(i.try_into().unwrap(), (), 1);
-        }
-    }
-}

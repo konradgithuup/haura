@@ -11,9 +11,12 @@ use crate::{
     size::SizeMut,
 };
 use std::{
-    collections::HashMap, hash::Hash, sync::{
-        Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}
-    }
+    collections::HashMap,
+    hash::Hash,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 /// A cache based on a `std::collections::HashMap` and a given `CachePolicy`.
@@ -42,17 +45,16 @@ impl<'a, K: 'a + Hash + Eq, V: SizeMut, P: CachePolicy<K>> HashmapCache<K, V, P>
             capacity,
             insertions: 0,
             evictions: 0,
-            removals: 0
+            removals: 0,
         }
     }
 }
 
-impl<K, V, P> Cache
-    for HashmapCache<K, V, P>
-    where
-        K: Clone + Sized + Eq + Hash  +Send + Sync + 'static,
-        V: Sync + Send + SizeMut + 'static,
-        P: CachePolicy<K>
+impl<K, V, P> Cache for HashmapCache<K, V, P>
+where
+    K: Clone + Sized + Eq + Hash + Send + Sync + 'static,
+    V: Sync + Send + SizeMut + 'static,
+    P: CachePolicy<K>,
 {
     type Key = K;
     type Value = V;

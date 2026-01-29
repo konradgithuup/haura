@@ -1,5 +1,7 @@
 use std::{marker::PhantomData, ptr::NonNull};
 
+use crate::cache::cache_policy::CacheIterator;
+
 struct ClockEntry<T> {
     value: T,
     next: NonNull<ClockEntry<T>>,
@@ -157,12 +159,14 @@ impl<T> Drop for Clock<T> {
 
 /// Immutable clock iterator
 pub struct ClockIter<'a, T: 'a> {
-    current: Option<NonNull<ClockEntry<T>>>,
-    last: NonNull<ClockEntry<T>>,
-    marker: PhantomData<&'a T>,
+    pub(crate) current: Option<NonNull<ClockEntry<T>>>,
+    pub(crate) last: NonNull<ClockEntry<T>>,
+    pub(crate) marker: PhantomData<&'a T>,
 }
 
-impl<'a, T> Iterator for ClockIter<'a, T> {
+impl<'a, T> CacheIterator<'a, T> for ClockIter<'a, T> {}
+
+impl<'a, T: 'a> Iterator for ClockIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -180,9 +184,9 @@ impl<'a, T> Iterator for ClockIter<'a, T> {
 
 /// Mutable clock iterator
 pub struct ClockIterMut<'a, T: 'a> {
-    current: Option<NonNull<ClockEntry<T>>>,
-    last: NonNull<ClockEntry<T>>,
-    marker: PhantomData<&'a mut T>,
+    pub current: Option<NonNull<ClockEntry<T>>>,
+    pub last: NonNull<ClockEntry<T>>,
+    pub marker: PhantomData<&'a mut T>,
 }
 
 impl<'a, T> Iterator for ClockIterMut<'a, T> {

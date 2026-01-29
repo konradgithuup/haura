@@ -3,20 +3,13 @@
 //! LRU is implemented on a doubly linked list.
 
 use std::{
-    collections::LinkedList, default, hash::Hash, marker::PhantomData, ptr::NonNull, sync::{
-        Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}
-    }
+    collections::{linked_list::Iter, LinkedList},
+    hash::Hash,
 };
 
-use gxhash::HashMap;
-use indexmap::Equivalent;
-use libc::remove;
-
-use crate::{
-    cache::{
-        Cache, RemoveError, cache_policy::{CacheIterator, CachePolicy}, cache_util::{CacheEntry, CacheStats, PinnedEntry}
-    },
-    size::SizeMut,
+use crate::cache::{
+    cache_policy::{CacheIterator, CachePolicy},
+    RemoveError,
 };
 
 /// Implements an LRU Cache Policy ontop of a doubly linked list.
@@ -34,7 +27,7 @@ impl<K: Hash + Eq> LRUCachePolicy<K> {
     }
 }
 
-impl <K: Clone + Eq + Hash + Send + Sync + 'static>CachePolicy<K> for LRUCachePolicy<K> {
+impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePolicy<K> {
     fn name(&self) -> &'static str {
         "LRU"
     }
@@ -43,7 +36,7 @@ impl <K: Clone + Eq + Hash + Send + Sync + 'static>CachePolicy<K> for LRUCachePo
         _ = is_write;
         match self.lru_list.extract_if(|k| k == accessed_key).nth(0) {
             Some(k) => self.lru_list.push_front(k),
-            None => ()
+            None => (),
         };
     }
 
@@ -54,7 +47,7 @@ impl <K: Clone + Eq + Hash + Send + Sync + 'static>CachePolicy<K> for LRUCachePo
     fn on_remove(&mut self, removed_key: &K) -> Option<RemoveError> {
         match self.lru_list.extract_if(|k| k == removed_key).count() {
             0 => Some(RemoveError::NotPresent),
-            _ => None
+            _ => None,
         }
     }
 
@@ -67,27 +60,26 @@ impl <K: Clone + Eq + Hash + Send + Sync + 'static>CachePolicy<K> for LRUCachePo
         self.lru_list.back()
     }
 
-    fn iter<'a>(&self) -> impl CacheIterator<'a, K> where K: 'a {
+    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
+    where
+        K: 'a,
+    {
         LRUIterator {
-            current: None,
-            marker: PhantomData
+            iter: self.lru_list.iter(),
         }
     }
 }
 
 struct LRUIterator<'a, T> {
-    current: Option<NonNull<T>>,
-    marker: PhantomData<&'a T>,
+    iter: Iter<'a, T>,
 }
 
-impl <'a, T>CacheIterator<'a, T> for LRUIterator<'a, T> {
+impl<'a, T> CacheIterator<'a, T> for LRUIterator<'a, T> {}
 
-}
-
-impl <'a, T: 'a>Iterator for LRUIterator<'a, T> {
+impl<'a, T: 'a> Iterator for LRUIterator<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        self.iter.next()
     }
 }
