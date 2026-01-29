@@ -3,7 +3,7 @@
 use crate::cache::RemoveError;
 
 /// Cache policy
-pub trait CachePolicy<'a, K: 'a, I: Iterator<Item = &'a K>>: Sync + Send {
+pub trait CachePolicy<K>: Sync + Send {
     /// Get name of policy.
     fn name(&self) -> &'static str;
 
@@ -14,7 +14,7 @@ pub trait CachePolicy<'a, K: 'a, I: Iterator<Item = &'a K>>: Sync + Send {
     fn on_add(&mut self, added_key: K);
 
     /// Updates cache policy after an object is removed.
-    fn on_remove(&mut self, removed_key: &K) -> RemoveError;
+    fn on_remove(&mut self, removed_key: &K) -> Option<RemoveError>;
 
     /// Replace a key with another.
     fn update(&mut self, old_key: &K, new_key: K);
@@ -24,5 +24,9 @@ pub trait CachePolicy<'a, K: 'a, I: Iterator<Item = &'a K>>: Sync + Send {
     fn pick_eviction_candidate(&self) -> Option<&K>;
 
     /// Returns an iterator over the cache entries as layed out in the cache.
-    fn iter(&self) -> I;
+    fn iter<'a>(&self) -> impl CacheIterator<'a, K> where K: 'a;
+}
+
+pub trait CacheIterator<'a, K: 'a + Sized>: Iterator<Item=&'a K> + Sized {
+
 }

@@ -2,7 +2,7 @@
 //!
 //! The cache is initialized with an arbitrary caching policy (Clock, LRU,...).
 
-use super::{clock::Clock, AddSize, Cache, ChangeKeyError, RemoveError, Stats};
+use super::{Cache, ChangeKeyError, RemoveError};
 use crate::{
     cache::{
         cache_policy::CachePolicy,
@@ -10,22 +10,16 @@ use crate::{
     },
     size::SizeMut,
 };
-use stable_deref_trait::StableDeref;
 use std::{
-    collections::HashMap,
-    fmt,
-    hash::Hash,
-    ops::Deref,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc,
-    },
+    collections::HashMap, hash::Hash, sync::{
+        Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}
+    }
 };
 
 /// A cache based on a `std::collections::HashMap` and a given `CachePolicy`.
-pub struct HashmapCache<K, V> {
+pub struct HashmapCache<K, V, P> {
     map: HashMap<K, Arc<CacheEntry<V>>>,
-    policy: Box<dyn for<'a> CachePolicy<K> + 'static>,
+    policy: Box<P>,
     capacity: usize,
     // Let's leak it
     size: &'static AtomicUsize,
@@ -36,9 +30,9 @@ pub struct HashmapCache<K, V> {
     removals: u64,
 }
 
-impl<K: Hash + Eq, V: SizeMut> HashmapCache<K, V> {
+impl<'a, K: 'a + Hash + Eq, V: SizeMut, P: CachePolicy<K>> HashmapCache<K, V, P> {
     /// Returns a new cache instance with the given `capacity`.
-    pub fn new(cache_policy: Box<dyn CachePolicy<K>>, capacity: usize) -> Self {
+    pub fn new(cache_policy: Box<P>, capacity: usize) -> Self {
         HashmapCache {
             map: Default::default(),
             policy: cache_policy,
@@ -48,22 +42,26 @@ impl<K: Hash + Eq, V: SizeMut> HashmapCache<K, V> {
             capacity,
             insertions: 0,
             evictions: 0,
-            removals: 0,
+            removals: 0
         }
     }
 }
 
-impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 'static> Cache
-    for HashmapCache<K, V>
+impl<K, V, P> Cache
+    for HashmapCache<K, V, P>
+    where
+        K: Clone + Sized + Eq + Hash  +Send + Sync + 'static,
+        V: Sync + Send + SizeMut + 'static,
+        P: CachePolicy<K>
 {
     type Key = K;
     type Value = V;
+    type Policy = P;
     type ValueRef = PinnedEntry<V>;
     type Stats = CacheStats;
 
-    fn new(capacity: usize) -> Self {
-        // Self::new(capacity)
-        todo!();
+    fn new(capacity: usize, policy: Box<P>) -> Self {
+        Self::new(policy, capacity)
     }
 
     fn contains_key(&self, key: &K) -> bool {
@@ -224,7 +222,7 @@ impl<K: Clone + Eq + Hash + Sync + Send + 'static, V: Sync + Send + SizeMut + 's
         }
     }
 
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a K> + 'a> {
+    fn iter<'b>(&'b self) -> Box<dyn Iterator<Item = &'b K> + 'b> {
         Box::new(self.policy.iter())
     }
 

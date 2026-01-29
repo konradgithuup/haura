@@ -42,9 +42,11 @@ pub trait Cache: Send + Sync {
     type Key: Eq + Hash;
     /// The cache entry type for the cache.
     type Value;
+    /// The cache policy to be used
+    type Policy: CachePolicy<Self::Key>;
 
     /// Constructs a new instance with the given `capacity` in bytes.
-    fn new(capacity: usize) -> Self;
+    fn new(capacity: usize, policy: Box<Self::Policy>) -> Self;
 
     /// The value returned by `get`. Holds a reference to the actual cache
     /// entry.
@@ -159,4 +161,34 @@ mod clock_cache;
 mod hashmap_cache;
 mod lru;
 mod lru_cache;
+use crate::cache::cache_policy::CachePolicy;
+
+pub use self::hashmap_cache::HashmapCache;
+
 pub use self::clock_cache::ClockCache;
+
+
+#[cfg(test)]
+mod cache_tests {
+    use crate::size::SizeMut;
+
+    use super::*;
+
+    #[test]
+    fn test_simple_lru() {
+    }
+
+    fn test_add_one_more<P: CachePolicy<u64>>(factory: fn(usize) -> Box<P>) {
+        let cap = 5;
+
+        let policy = factory(cap);
+        let mut cache: HashmapCache<u64, (), P> = HashmapCache::new(policy, cap);
+
+        for i in 0..(cap+1) {
+            if (cache.size() >= cache.capacity()) {
+                cache.evict(f)
+            }
+            cache.insert(i.try_into().unwrap(), (), 1);
+        }
+    }
+}
