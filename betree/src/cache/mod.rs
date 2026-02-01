@@ -42,9 +42,11 @@ pub trait Cache: Send + Sync {
     type Key: Eq + Hash;
     /// The cache entry type for the cache.
     type Value;
+    /// The cache policy to be used
+    type Policy: CachePolicy<Self::Key>;
 
     /// Constructs a new instance with the given `capacity` in bytes.
-    fn new(capacity: usize) -> Self;
+    fn new(capacity: usize, policy: Box<Self::Policy>) -> Self;
 
     /// The value returned by `get`. Holds a reference to the actual cache
     /// entry.
@@ -152,6 +154,14 @@ pub trait Stats: Display + Debug + serde::Serialize {
     fn removals(&self) -> u64;
 }
 
+mod cache_policy;
+mod cache_util;
 mod clock;
-mod clock_cache;
-pub use self::clock_cache::ClockCache;
+mod clock_policy;
+mod hashmap_cache;
+mod lru_policy;
+mod test;
+use crate::cache::cache_policy::CachePolicy;
+
+pub use self::clock_policy::ClockCachePolicy;
+pub use self::hashmap_cache::HashmapCache;

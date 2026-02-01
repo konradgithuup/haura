@@ -1,7 +1,7 @@
 //! This module provides the Database Layer.
 use crate::{
     atomic_option::AtomicOption,
-    cache::ClockCache,
+    cache::{ClockCachePolicy, HashmapCache},
     checksum::GxHash,
     compression::CompressionConfiguration,
     cow_bytes::SlicedCowBytes,
@@ -76,9 +76,10 @@ type DbHandler = Handler<ObjectRef>;
 
 pub(crate) type RootSpu = StoragePoolUnit<Checksum>;
 pub(crate) type RootDmu = Dmu<
-    ClockCache<
+    HashmapCache<
         data_management::impls::ObjectKey<Generation>,
         TaggedCacheValue<RwLock<Object>, PivotKey>,
+        ClockCachePolicy<data_management::impls::ObjectKey<Generation>>,
     >,
     RootSpu,
 >;
@@ -246,7 +247,7 @@ impl DatabaseConfiguration {
             self.default_storage_class,
             spu,
             strategy,
-            ClockCache::new(self.cache_size),
+            HashmapCache::new(Box::new(ClockCachePolicy::new()), self.cache_size),
             handler,
             #[cfg(feature = "allocation_log")]
             self.allocation_log_file_path.clone(),
