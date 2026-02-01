@@ -7,6 +7,9 @@ pub trait CachePolicy<K>: Sync + Send {
     /// Get name of policy.
     fn name(&self) -> &'static str;
 
+    /// The maximum number of consecutive eviction failures.
+    fn max_evict_failures(&self) -> usize;
+
     /// Updates cache policy after object access.
     fn on_access(&mut self, accessed_key: &K, is_write: bool);
 

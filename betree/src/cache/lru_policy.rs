@@ -32,6 +32,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         "LRU"
     }
 
+    fn max_evict_failures(&self) -> usize {
+        return self.lru_list.len();
+    }
+
     fn on_access(&mut self, accessed_key: &K, is_write: bool) {
         _ = is_write;
         match self.lru_list.extract_if(|k| k == accessed_key).nth(0) {

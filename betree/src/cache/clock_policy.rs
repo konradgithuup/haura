@@ -23,6 +23,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
         "Clock"
     }
 
+    fn max_evict_failures(&self) -> usize {
+        return self.clock.len() * 2;
+    }
+
     fn on_access(&mut self, _accessed_key: &K, _is_write: bool) {
         // do nothing?
     }

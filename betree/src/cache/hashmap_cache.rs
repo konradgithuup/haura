@@ -154,41 +154,70 @@ where
     fn evict<F>(&mut self, mut f: F) -> Option<(K, V)>
     where
         F: FnMut(&K, &mut V, &dyn Fn(&K) -> bool) -> Option<usize>,
-    {
+        {
         self.verify();
 
-        let key = match self.policy.pick_eviction_candidate().cloned() {
-            None => {
-                warn!("Unable to pick eviction candidate");
-                return None;
-            }
-            Some(key) => key,
-        };
-        let eviction_successful = {
-            let second_ref: &Self = unsafe { &*(self as *mut _) };
-            let entry = self.map.get_mut(&key).unwrap();
+        let mut cnt = 0;
+        let ret = loop {
+            let key = match self.policy.pick_eviction_candidate() {
+                Some(k) => k.clone(),
+                None => {
+                    warn!("{} size mismatch", self.policy.name());
+                    break None;
+                }
+            };
+            let eviction_successful = {
 
-            if let Some(entry) = Arc::get_mut(entry) {
-                f(&key, &mut entry.value, &|k| second_ref.contains_key(k))
+                let second_ref: &Self = unsafe { &*(self as *mut _) };
+                let entry = self.map.get_mut(&key).unwrap();
+
+                // An entry will be evicted if the following three conditions are satisfied:
+                // - The cache entry is not pinned
+                // - The referenced bit of the cache entry is false
+                // - The eviction callback signals a successful eviction.
+                if let Some(entry) = Arc::get_mut(entry) {
+                    // reset reference bit
+                    let was_referenced = *entry.referenced.get_mut();
+                    *entry.referenced.get_mut() = false;
+                    if was_referenced {
+                        None
+                    } else {
+                        f(&key, &mut entry.value, &|k| second_ref.contains_key(k))
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(size) = eviction_successful {
+                let _ = self.policy.on_remove(&key);
+                #[cfg(not(debug_assertions))]
+                let entry = self.map.remove(&key).unwrap();
+                #[cfg(debug_assertions)]
+                let mut entry = self.map.remove(&key).unwrap();
+
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(entry) = Arc::get_mut(&mut entry) {
+                        assert_eq!(entry.value.cache_size(), size);
+                    }
+                }
+
+                self.evictions += 1;
+                self.size.fetch_sub(size, Ordering::Relaxed);
+                let value = Arc::try_unwrap(entry).ok().unwrap().value;
+                break Some((key, value));
             } else {
-                None
+                self.policy.on_access(&key, false);
+            }
+
+            cnt += 1;
+            if cnt >= self.policy.max_evict_failures() {
+                warn!("Clock eviction failed");
+                break None;
             }
         };
 
-        let ret = if let Some(size) = eviction_successful {
-            let value = self.map.remove(&key).unwrap();
-            let value = Arc::try_unwrap(value).ok().unwrap().value;
-            self.policy.on_remove(&key);
-
-            self.evictions += 1;
-            self.size.fetch_sub(size, Ordering::Relaxed);
-            Some((key, value))
-        } else {
-            None
-        };
-
         self.verify();
-
         ret
     }
 

@@ -81,6 +81,23 @@ mod cache_tests {
         assert!(cache.size() == 0);
     }
 
+    #[rstest]
+    #[case(ClockCachePolicy::new(), 0)]
+    #[case(LRUCachePolicy::new(), 0)]
+    fn test_evict<P: CachePolicy<u64>>(#[case] policy: P, #[case] evicted_key: u64) {
+        let cap = 2;
+        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+
+        cache.insert(0, TestVal{}, 1);
+        cache.insert(1, TestVal{}, 1);
+        cache.insert(2, TestVal{}, 1);
+        let ret = cache.evict(|_, _, _| Some(1));
+
+        assert!(ret.is_some());
+        assert_eq!(ret.unwrap().0, evicted_key);
+        assert!(!cache.contains_key(&evicted_key));
+    }
+
     struct TestVal {}
 
     impl SizeMut for TestVal {
