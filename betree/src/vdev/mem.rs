@@ -52,7 +52,6 @@ impl Memory {
 
     fn slice_read(&self, size: Block<u32>, offset: Block<u64>) -> Result<Buf> {
         self.stats.read.fetch_add(size.as_u64(), Ordering::Relaxed);
-        #[cfg(feature = "latency_metrics")]
         let start = std::time::Instant::now();
 
         match self.slice_blocks(size, offset) {
@@ -73,6 +72,10 @@ impl Memory {
                         .unwrap_or(u32::MAX as u64),
                     Ordering::Relaxed,
                 );
+                self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .read_latency_total_nanos
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 Ok(buf)
             }
             Err(e) => {
@@ -85,6 +88,10 @@ impl Memory {
                         .unwrap_or(u32::MAX as u64),
                     Ordering::Relaxed,
                 );
+                self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .read_latency_total_nanos
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats
                     .failed_reads
                     .fetch_add(size.as_u64(), Ordering::Relaxed);
@@ -170,7 +177,6 @@ impl VdevLeafRead for Memory {
         let size = Block::from_bytes(buf.as_mut().len() as u32);
         self.stats.read.fetch_add(size.as_u64(), Ordering::Relaxed);
         let buf_mut = buf.as_mut();
-        #[cfg(feature = "latency_metrics")]
         let start = std::time::Instant::now();
         match self.slice(buf_mut.len(), offset.to_bytes() as usize) {
             Ok(src) => {
@@ -184,6 +190,10 @@ impl VdevLeafRead for Memory {
                         .unwrap_or(u32::MAX as u64),
                     Ordering::Relaxed,
                 );
+                self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .read_latency_total_nanos
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 Ok(buf)
             }
             Err(e) => {
@@ -196,6 +206,10 @@ impl VdevLeafRead for Memory {
                         .unwrap_or(u32::MAX as u64),
                     Ordering::Relaxed,
                 );
+                self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .read_latency_total_nanos
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats
                     .failed_reads
                     .fetch_add(size.as_u64(), Ordering::Relaxed);
@@ -221,17 +235,26 @@ impl VdevLeafWrite for Memory {
     ) -> Result<()> {
         let block_cnt = Block::from_bytes(data.as_ref().len() as u64).as_u64();
         self.stats.written.fetch_add(block_cnt, Ordering::Relaxed);
+        let start = std::time::Instant::now();
         match self
             .slice_mut(data.as_ref().len(), offset.to_bytes() as usize)
             .map(|mut dst| dst.copy_from_slice(data.as_ref()))
         {
             Ok(()) => {
+                self.stats.written_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .written_latency_total_nanos
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 if is_repair {
                     self.stats.repaired.fetch_add(block_cnt, Ordering::Relaxed);
                 }
                 Ok(())
             }
             Err(e) => {
+                self.stats.written_count.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .written_latency_total_nanos
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats
                     .failed_writes
                     .fetch_add(block_cnt, Ordering::Relaxed);

@@ -27,6 +27,14 @@ pub struct Statistics {
     #[cfg(feature = "latency_metrics")]
     /// The average latency over all read operations
     pub read_latency: u64,
+    /// Total nanoseconds spent reading
+    pub read_latency_total_nanos: u64,
+    /// Total nanoseconds spent writing
+    pub written_latency_total_nanos: u64,
+    /// Total number of read operations
+    pub read_count: u64,
+    /// Total number of write operations
+    pub written_count: u64,
 }
 
 #[derive(Default, Debug)]
@@ -41,6 +49,10 @@ struct AtomicStatistics {
     prev_read: AtomicU64,
     #[cfg(feature = "latency_metrics")]
     read_op_latency: AtomicU64,
+    read_latency_total_nanos: AtomicU64,
+    written_latency_total_nanos: AtomicU64,
+    read_count: AtomicU64,
+    written_count: AtomicU64,
 }
 
 impl AtomicStatistics {
@@ -66,6 +78,10 @@ impl AtomicStatistics {
                         .saturating_sub(self.prev_read.load(Ordering::Relaxed)),
                 )
                 .unwrap_or(0),
+            read_latency_total_nanos: self.read_latency_total_nanos.load(Ordering::Relaxed),
+            written_latency_total_nanos: self.written_latency_total_nanos.load(Ordering::Relaxed),
+            read_count: self.read_count.load(Ordering::Relaxed),
+            written_count: self.written_count.load(Ordering::Relaxed),
         }
     }
 }
@@ -261,4 +277,40 @@ pub(crate) enum Dev {
     Leaf(Leaf),
     Mirror(Mirror<Leaf>),
     Parity1(Parity1<Leaf>),
+}
+
+mod tests {
+    use super::*;
+    use crate::buffer::Buf;
+    use crate::vdev::{Block, Memory, Vdev, VdevRead, VdevWrite};
+    use futures::executor::block_on;
+
+    #[test]
+    fn test_stats_tracking_memory() {
+        let vdev = Memory::new(4096 * 10, "test".to_string()).unwrap();
+
+        // Check initial state
+        let stats = vdev.stats();
+        assert_eq!(stats.read_count, 0);
+        assert_eq!(stats.written_count, 0);
+        assert_eq!(stats.read_latency_total_nanos, 0);
+        assert_eq!(stats.written_latency_total_nanos, 0);
+
+        // Perform Write
+        let data = vec![1u8; 4096].into_boxed_slice();
+        let buf = Buf::from(data);
+
+        block_on(vdev.write(buf, Block(0))).unwrap();
+
+        // Check write stats
+        let stats = vdev.stats();
+        assert_eq!(stats.written_count, 1);
+
+        // Perform Read
+        block_on(VdevRead::read_raw(&vdev, Block(1), Block(0))).unwrap();
+
+        // Check read stats
+        let stats = vdev.stats();
+        assert_eq!(stats.read_count, 1);
+    }
 }

@@ -52,6 +52,9 @@ impl VdevRead for PMemFile {
         checksum: C,
     ) -> Result<Buf> {
         self.stats.read.fetch_add(size.as_u64(), Ordering::Relaxed);
+
+        let start = std::time::Instant::now();
+
         let buf = unsafe {
             let slice = self
                 .file
@@ -66,11 +69,10 @@ impl VdevRead for PMemFile {
             )
         };
 
-        // let buf = {
-        //     let mut buf = Buf::zeroed(size).into_full_mut();
-        //     self.file.read(offset.to_bytes() as usize, buf.as_mut());
-        //     buf.into_full_buf()
-        // };
+        self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .read_latency_total_nanos
+            .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
         match checksum.verify(&buf).map_err(VdevError::from) {
             Ok(()) => Ok(buf),
@@ -99,7 +101,8 @@ impl VdevRead for PMemFile {
 
     async fn read_raw(&self, size: Block<u32>, offset: Block<u64>) -> Result<Vec<Buf>> {
         self.stats.read.fetch_add(size.as_u64(), Ordering::Relaxed);
-        // let mut buf = Buf::zeroed(size).into_full_mut();
+
+        let start = std::time::Instant::now();
 
         let buf = unsafe {
             let slice = self
@@ -115,7 +118,11 @@ impl VdevRead for PMemFile {
             )
         };
 
-        // self.file.read(offset.to_bytes() as usize, buf.as_mut());
+        self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .read_latency_total_nanos
+            .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
         Ok(vec![buf])
     }
 }
@@ -154,7 +161,14 @@ impl VdevLeafRead for PMemFile {
         let size = Block::from_bytes(buf.as_mut().len() as u32);
         self.stats.read.fetch_add(size.as_u64(), Ordering::Relaxed);
 
+        let start = std::time::Instant::now();
+
         self.file.read(offset.to_bytes() as usize, buf.as_mut());
+
+        self.stats.read_count.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .read_latency_total_nanos
+            .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
         Ok(buf)
     }
 
@@ -176,7 +190,14 @@ impl VdevLeafWrite for PMemFile {
         let block_cnt = Block::from_bytes(data.as_ref().len() as u64).as_u64();
         self.stats.written.fetch_add(block_cnt, Ordering::Relaxed);
 
+        let start = std::time::Instant::now();
+
         unsafe { self.file.write(offset.to_bytes() as usize, data.as_ref()) };
+
+        self.stats.written_count.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .written_latency_total_nanos
+            .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
         Ok(())
     }
 
