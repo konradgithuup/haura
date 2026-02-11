@@ -5,7 +5,7 @@ mod cache_tests {
     use crate::{
         cache::{
             cache_policy::CachePolicy, clock_policy::ClockCachePolicy, lru_policy::LRUCachePolicy,
-            Cache, HashmapCache,
+            Cache, HashmapCache, WattPolicy,
         },
         size::SizeMut,
     };
@@ -14,6 +14,7 @@ mod cache_tests {
     #[rstest]
     #[case(LRUCachePolicy::new())]
     #[case(ClockCachePolicy::new())]
+    #[case(WattPolicy::new(100))]
     fn test_insert_exceeding_cap<P: CachePolicy<u64>>(#[case] policy: P) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
@@ -45,6 +46,8 @@ mod cache_tests {
     #[case(LRUCachePolicy::new())]
     #[should_panic]
     #[case(ClockCachePolicy::new())]
+    #[should_panic]
+    #[case(WattPolicy::new(100))]
     fn test_insert_duplicate<P: CachePolicy<u64>>(#[case] policy: P) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
@@ -63,6 +66,7 @@ mod cache_tests {
     #[rstest]
     #[case(LRUCachePolicy::new())]
     #[case(ClockCachePolicy::new())]
+    #[case(WattPolicy::new(100))]
     fn test_remove<P: CachePolicy<u64>>(#[case] policy: P) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
@@ -84,6 +88,7 @@ mod cache_tests {
     #[rstest]
     #[case(ClockCachePolicy::new(), 0)]
     #[case(LRUCachePolicy::new(), 0)]
+    #[case(WattPolicy::new(100), 0)]
     fn test_evict<P: CachePolicy<u64>>(#[case] policy: P, #[case] evicted_key: u64) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
