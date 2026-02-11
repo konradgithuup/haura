@@ -160,8 +160,10 @@ mod clock;
 mod clock_policy;
 mod hashmap_cache;
 mod lru_policy;
+mod watt_policy;
 mod test;
 use crate::cache::cache_policy::CachePolicy;
 
 pub use self::clock_policy::ClockCachePolicy;
+pub use self::watt_policy::WattPolicy;
 pub use self::hashmap_cache::HashmapCache;
