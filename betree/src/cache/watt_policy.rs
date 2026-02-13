@@ -1,9 +1,9 @@
 //! This module provides the Write-Aware Timestamp Tracking (WATT) cache policy.
+use crate::cache::cache_policy::{CacheIterator, CachePolicy};
+use crate::cache::RemoveError;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use crate::cache::cache_policy::{CacheIterator, CachePolicy};
-use crate::cache::RemoveError;
 
 const ACCESS_HISTORY_SIZE: usize = 8;
 const WRITE_HISTORY_SIZE: usize = 4;
@@ -64,19 +64,27 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
     fn calculate_pv(&self, hist: &WattHistory) -> f32 {
         let mut max_ac_sf = 0.0;
         for i in 1..=(hist.ac_count as usize) {
-            let ts = hist.access_log[(hist.ac_head as usize + ACCESS_HISTORY_SIZE - (i - 1)) % ACCESS_HISTORY_SIZE];
+            let ts = hist.access_log
+                [(hist.ac_head as usize + ACCESS_HISTORY_SIZE - (i - 1)) % ACCESS_HISTORY_SIZE];
             let age = (self.t_now.saturating_sub(ts)).max(1);
             let mut sf = (i as f32) / (age as f32);
-            if i == 1 { sf *= RECENCY_DAMPENING; }
-            if sf > max_ac_sf { max_ac_sf = sf; }
+            if i == 1 {
+                sf *= RECENCY_DAMPENING;
+            }
+            if sf > max_ac_sf {
+                max_ac_sf = sf;
+            }
         }
 
         let mut max_wr_sf = 0.0;
         for i in 1..=(hist.wr_count as usize) {
-            let ts = hist.write_log[(hist.wr_head as usize + WRITE_HISTORY_SIZE - (i - 1)) % WRITE_HISTORY_SIZE];
+            let ts = hist.write_log
+                [(hist.wr_head as usize + WRITE_HISTORY_SIZE - (i - 1)) % WRITE_HISTORY_SIZE];
             let age = (self.t_now.saturating_sub(ts)).max(1);
             let sf = (i as f32) / (age as f32);
-            if sf > max_wr_sf { max_wr_sf = sf; }
+            if sf > max_wr_sf {
+                max_wr_sf = sf;
+            }
         }
 
         max_ac_sf + (self.write_weight * max_wr_sf)
@@ -84,9 +92,13 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
 }
 
 impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy<K> {
-    fn name(&self) -> &'static str { "WATT" }
+    fn name(&self) -> &'static str {
+        "WATT"
+    }
 
-    fn max_evict_failures(&self) -> usize { self.keys.len() }
+    fn max_evict_failures(&self) -> usize {
+        self.keys.len()
+    }
 
     fn on_access(&mut self, accessed_key: &K, is_write: bool) {
         if let Some(hist) = self.history.get_mut(accessed_key) {
@@ -146,7 +158,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
 
     fn pick_eviction_candidate(&self) -> Option<&K> {
         let len = self.keys.len();
-        if len == 0 { return None; }
+        if len == 0 {
+            return None;
+        }
 
         let n = self.sample_size.min(len);
 
@@ -172,8 +186,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         Some(&self.keys[best_key_idx])
     }
 
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K> where K: 'a {
-        WattIter { inner: self.keys.iter() }
+    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
+    where
+        K: 'a,
+    {
+        WattIter {
+            inner: self.keys.iter(),
+        }
     }
 }
 
@@ -183,7 +202,9 @@ struct WattIter<'a, K> {
 
 impl<'a, K: 'a> Iterator for WattIter<'a, K> {
     type Item = &'a K;
-    fn next(&mut self) -> Option<Self::Item> { self.inner.next() }
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
 }
 
 impl<'a, K: 'a> CacheIterator<'a, K> for WattIter<'a, K> {}
@@ -238,6 +259,6 @@ mod tests {
 
         let second_candidate = *policy.pick_eviction_candidate().unwrap();
         assert!(second_candidate >= DEFAULT_SAMPLE_SIZE);
-        assert!(second_candidate < 2 * DEFAULT_SAMPLE_SIZE6);
+        assert!(second_candidate < 2 * DEFAULT_SAMPLE_SIZE);
     }
 }
