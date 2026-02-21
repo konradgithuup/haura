@@ -50,10 +50,16 @@ impl<T> Clock<T> {
     }
 
     /// Increments the *hand* so that the head of the list becomes the tail.
-    pub fn next(&mut self) {
+    /// Returns the value of the previous head.
+    pub fn next(&mut self) -> Option<&T> {
         if let Some(ref mut tail) = self.tail {
-            *tail = unsafe { tail.as_ref() }.next;
+            let head = unsafe { tail.as_ref() }.next;
+            let prev_head_val = &unsafe { &*head.as_ptr() }.value;
+            *tail = head;
+
+            return Some(prev_head_val);
         };
+        None
     }
 
     /// Inserts the given element at the end of the list.

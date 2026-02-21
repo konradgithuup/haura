@@ -58,7 +58,12 @@ pub trait Cache: Send + Sync {
     /// Returns a cache entry if present.
     /// The cache entry will be pinned while the return value is in scope.
     /// See `Self::ValueRef` for more information.
-    fn get(&self, key: &Self::Key, count_miss: bool) -> Option<Self::ValueRef>;
+    fn get(
+        &mut self,
+        key: &Self::Key,
+        count_miss: bool,
+        access: CacheAccess,
+    ) -> Option<Self::ValueRef>;
 
     /// Removes a cache entry if present and not pinned.
     /// `f` shall return the size of the cache entry in bytes.
@@ -160,10 +165,11 @@ mod clock;
 mod clock_policy;
 mod hashmap_cache;
 mod lru_policy;
-mod watt_policy;
 mod test;
+mod watt_policy;
 use crate::cache::cache_policy::CachePolicy;
 
+pub use self::cache_util::CacheAccess;
 pub use self::clock_policy::ClockCachePolicy;
-pub use self::watt_policy::WattPolicy;
 pub use self::hashmap_cache::HashmapCache;
+pub use self::watt_policy::WattPolicy;

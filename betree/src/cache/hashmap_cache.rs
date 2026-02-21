@@ -5,23 +5,25 @@
 use super::{Cache, ChangeKeyError, RemoveError};
 use crate::{
     cache::{
-        cache_policy::CachePolicy,
+        cache_policy::{CacheIterator, CachePolicy},
         cache_util::{CacheEntry, CacheStats, PinnedEntry},
+        CacheAccess,
     },
     size::SizeMut,
 };
 use std::{
+    cell::RefCell,
     collections::HashMap,
     hash::Hash,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc,
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
     },
 };
 
 /// A cache based on a `std::collections::HashMap` and a given `CachePolicy`.
 pub struct HashmapCache<K, V, P> {
-    map: HashMap<K, Arc<CacheEntry<V>>>,
+    map: HashMap<K, Arc<V>>,
     policy: Box<P>,
     capacity: usize,
     // Let's leak it
@@ -50,6 +52,19 @@ impl<'a, K: 'a + Hash + Eq, V: SizeMut, P: CachePolicy<K>> HashmapCache<K, V, P>
     }
 }
 
+impl<K, V, P> HashmapCache<K, V, P> {
+    // allows mutable policy access using &self (necessary for self::get)
+    /*fn get_policy_ref(&self) -> Option<RwLockWriteGuard<'_, Box<P>>> {
+        match self.policy.try_write() {
+            Ok(policy) => Some(policy),
+            Err(e) => {
+                warn!("Lock Error on cache policy {}", e);
+                return None;
+            }
+        }
+    }*/
+}
+
 impl<K, V, P> Cache for HashmapCache<K, V, P>
 where
     K: Clone + Sized + Eq + Hash + Send + Sync + 'static,
@@ -70,13 +85,18 @@ where
         self.map.contains_key(key)
     }
 
-    fn get(&self, key: &K, count_miss: bool) -> Option<Self::ValueRef> {
-        if let Some(entry) = self.map.get(key).cloned() {
+    fn get(&mut self, key: &K, count_miss: bool, access: CacheAccess) -> Option<Self::ValueRef> {
+        if let Some(value) = self.map.get(key).cloned() {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            entry.referenced.store(true, Ordering::Relaxed);
+
+            self.policy.on_access(key, access);
+            //if let Some(mut policy) = self.get_policy_ref() {
+            //policy.on_access(key, false);
+            //}
+
             Some(PinnedEntry {
                 size: self.size,
-                entry,
+                value,
             })
         } else {
             if count_miss {
@@ -95,9 +115,14 @@ where
             let entry = self.map.get_mut(key).ok_or(RemoveError::NotPresent)?;
             Arc::get_mut(entry).ok_or(RemoveError::Pinned)?;
         }
+
+        //if let Some(mut policy) = self.get_policy_ref() {
+        //    policy.on_remove(key);
+        //}
         self.policy.on_remove(key);
+
         let entry = self.map.remove(key).unwrap();
-        let mut value = Arc::try_unwrap(entry).ok().unwrap().value;
+        let mut value = Arc::try_unwrap(entry).ok().unwrap();
         let size = f(&mut value);
         self.removals += 1;
         self.size.fetch_sub(size, Ordering::Relaxed);
@@ -107,7 +132,12 @@ where
 
     fn force_remove(&mut self, key: &Self::Key, size: usize) -> bool {
         self.verify();
+
+        //if let Some(mut policy) = self.get_policy_ref() {
+        //    policy.on_remove(key);
+        //}
         self.policy.on_remove(key);
+
         if self.map.remove(key).is_none() {
             return false;
         }
@@ -124,14 +154,17 @@ where
         self.verify();
         let new_key = {
             let second_ref: &Self = unsafe { &*(self as *mut _) };
-            let entry = self.map.get_mut(key).ok_or(ChangeKeyError::NotPresent)?;
-            let entry = Arc::get_mut(entry).ok_or(ChangeKeyError::Pinned)?;
-            f(key, &mut entry.value, &|k| second_ref.contains_key(k))?
+            let value = self.map.get_mut(key).ok_or(ChangeKeyError::NotPresent)?;
+            let value = Arc::get_mut(value).ok_or(ChangeKeyError::Pinned)?;
+            f(key, value, &|k| second_ref.contains_key(k))?
         };
         let entry = self.map.remove(key).unwrap();
         self.map.insert(new_key.clone(), entry);
 
         self.policy.update(key, new_key);
+        //        if let Some(mut policy) = self.get_policy_ref() {
+        //           policy.update(key, new_key);
+        //      }
 
         self.verify();
         Ok(())
@@ -146,6 +179,9 @@ where
         self.map.insert(new_key.clone(), entry);
 
         self.policy.update(key, new_key);
+        //if let Ok(mut policy) = self.policy.try_write() {
+        //    policy.update(key, new_key);
+        //}
 
         self.verify();
         true
@@ -154,86 +190,64 @@ where
     fn evict<F>(&mut self, mut f: F) -> Option<(K, V)>
     where
         F: FnMut(&K, &mut V, &dyn Fn(&K) -> bool) -> Option<usize>,
-        {
+    {
         self.verify();
 
-        let mut cnt = 0;
-        let ret = loop {
-            let key = match self.policy.pick_eviction_candidate() {
-                Some(k) => k.clone(),
-                None => {
-                    warn!("{} size mismatch", self.policy.name());
-                    break None;
-                }
-            };
-            let eviction_successful = {
+        let second_ref: &Self = unsafe { &*(self as *mut _) };
 
-                let second_ref: &Self = unsafe { &*(self as *mut _) };
-                let entry = self.map.get_mut(&key).unwrap();
+        // let policy determine best eviction entry
+        //let mut policy = second_ref.get_policy_ref()?;
 
-                // An entry will be evicted if the following three conditions are satisfied:
-                // - The cache entry is not pinned
-                // - The referenced bit of the cache entry is false
-                // - The eviction callback signals a successful eviction.
-                if let Some(entry) = Arc::get_mut(entry) {
-                    // reset reference bit
-                    let was_referenced = *entry.referenced.get_mut();
-                    *entry.referenced.get_mut() = false;
-                    if was_referenced {
-                        None
-                    } else {
-                        f(&key, &mut entry.value, &|k| second_ref.contains_key(k))
-                    }
-                } else {
-                    None
-                }
-            };
-            if let Some(size) = eviction_successful {
-                let _ = self.policy.on_remove(&key);
-                #[cfg(not(debug_assertions))]
-                let entry = self.map.remove(&key).unwrap();
-                #[cfg(debug_assertions)]
-                let mut entry = self.map.remove(&key).unwrap();
+        let (key, size) = match self.policy.pick_eviction_candidate(|k| {
+            let entry = self.map.get_mut(k).unwrap();
 
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(entry) = Arc::get_mut(&mut entry) {
-                        assert_eq!(entry.value.cache_size(), size);
-                    }
-                }
-
-                self.evictions += 1;
-                self.size.fetch_sub(size, Ordering::Relaxed);
-                let value = Arc::try_unwrap(entry).ok().unwrap().value;
-                break Some((key, value));
-            } else {
-                self.policy.on_access(&key, false);
+            match Arc::get_mut(entry) {
+                Some(value) => f(k, value, &|map_key| second_ref.contains_key(map_key)),
+                None => None,
             }
-
-            cnt += 1;
-            if cnt >= self.policy.max_evict_failures() {
-                warn!("Clock eviction failed");
-                break None;
+        }) {
+            Some(k) => k.clone(),
+            None => {
+                warn!("{} eviction failed!", self.policy.name());
+                return None;
             }
         };
 
+        let key = key.clone();
+
+        // remove chosen entry
+        let _ = self.policy.on_remove(&key);
+        #[cfg(not(debug_assertions))]
+        let entry = self.map.remove(&key).unwrap();
+        #[cfg(debug_assertions)]
+        let mut entry = self.map.remove(&key).unwrap();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Some(value) = Arc::get_mut(&mut entry) {
+                assert_eq!(value.cache_size(), size);
+            }
+        }
+
+        self.evictions += 1;
+        self.size.fetch_sub(size, Ordering::Relaxed);
+        let value = Arc::try_unwrap(entry).ok().unwrap();
+
         self.verify();
-        ret
+
+        Some((key, value))
     }
 
     fn insert(&mut self, key: K, mut value: V, size: usize) {
         assert_eq!(value.cache_size(), size);
 
-        let old_value = self.map.insert(
-            key.clone(),
-            Arc::new(CacheEntry {
-                value,
-                referenced: AtomicBool::new(false),
-            }),
-        );
+        let old_value = self.map.insert(key.clone(), Arc::new(value));
         assert!(old_value.is_none());
 
         self.policy.on_add(key);
+        //if let Ok(mut policy) = self.policy.try_write() {
+        //    policy.on_add(key);
+        //}
 
         self.insertions += 1;
         self.size.fetch_add(size, Ordering::Relaxed);

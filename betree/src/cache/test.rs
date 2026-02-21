@@ -93,14 +93,38 @@ mod cache_tests {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
 
-        cache.insert(0, TestVal{}, 1);
-        cache.insert(1, TestVal{}, 1);
-        cache.insert(2, TestVal{}, 1);
+        cache.insert(0, TestVal {}, 1);
+        cache.insert(1, TestVal {}, 1);
+        cache.insert(2, TestVal {}, 1);
         let ret = cache.evict(|_, _, _| Some(1));
 
         assert!(ret.is_some());
         assert_eq!(ret.unwrap().0, evicted_key);
         assert!(!cache.contains_key(&evicted_key));
+    }
+
+    /// The cache policy should provide new eviction candidates if possible.
+    #[rstest]
+    #[case(ClockCachePolicy::new())]
+    #[case(LRUCachePolicy::new())]
+    #[case(WattPolicy::new(100))]
+    fn test_evict_skip<P: CachePolicy<u64>>(#[case] policy: P) {
+        let cap = 2;
+        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+
+        cache.insert(0, TestVal {}, 1);
+        cache.insert(1, TestVal {}, 1);
+        cache.insert(2, TestVal {}, 1);
+        let ret = cache.evict(|key, _, _| match key.clone() == 2 {
+            true => Some(1),
+            false => None,
+        });
+        assert!(ret.is_some());
+        assert_eq!(cache.size(), 2);
+
+        assert!(cache.contains_key(&0));
+        assert!(cache.contains_key(&1));
+        assert!(!cache.contains_key(&2));
     }
 
     struct TestVal {}

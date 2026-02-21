@@ -9,7 +9,7 @@ use std::{
 
 use crate::cache::{
     cache_policy::{CacheIterator, CachePolicy},
-    RemoveError,
+    CacheAccess, RemoveError,
 };
 
 /// Implements an LRU Cache Policy ontop of a doubly linked list.
@@ -36,8 +36,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         return self.lru_list.len();
     }
 
-    fn on_access(&mut self, accessed_key: &K, is_write: bool) {
-        _ = is_write;
+    fn on_access(&mut self, accessed_key: &K, _access: CacheAccess) {
         match self.lru_list.extract_if(|k| k == accessed_key).nth(0) {
             Some(k) => self.lru_list.push_front(k),
             None => (),
@@ -60,8 +59,15 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         self.lru_list.push_front(new_key);
     }
 
-    fn pick_eviction_candidate(&self) -> Option<&K> {
-        self.lru_list.back()
+    fn pick_eviction_candidate(&mut self) -> Option<&K> {
+        if self.lru_list.len() <= 1 {
+            return self.lru_list.back();
+        }
+
+        let candidate = self.lru_list.pop_back()?;
+        self.lru_list.push_front(candidate);
+
+        self.lru_list.front()
     }
 
     fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>

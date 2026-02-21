@@ -1,6 +1,6 @@
 //! This module provides the Write-Aware Timestamp Tracking (WATT) cache policy.
 use crate::cache::cache_policy::{CacheIterator, CachePolicy};
-use crate::cache::RemoveError;
+use crate::cache::{CacheAccess, RemoveError};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -100,9 +100,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         self.keys.len()
     }
 
-    fn on_access(&mut self, accessed_key: &K, is_write: bool) {
+    fn on_access(&mut self, accessed_key: &K, access: CacheAccess) {
         if let Some(hist) = self.history.get_mut(accessed_key) {
-            if is_write {
+            if access == CacheAccess::WRITE {
                 hist.wr_head = (hist.wr_head + 1) % WRITE_HISTORY_SIZE as u8;
                 hist.write_log[hist.wr_head as usize] = self.t_now;
                 hist.wr_count = (hist.wr_count + 1).min(WRITE_HISTORY_SIZE as u8);
@@ -156,7 +156,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         }
     }
 
-    fn pick_eviction_candidate(&self) -> Option<&K> {
+    fn pick_eviction_candidate(&mut self) -> Option<&K> {
         let len = self.keys.len();
         if len == 0 {
             return None;
@@ -220,7 +220,7 @@ mod tests {
         policy.on_add(2);
 
         for _ in 0..5 {
-            policy.on_access(&1, false);
+            policy.on_access(&1, crate::cache::CacheAccess::READ);
         }
 
         // Key 2 should be the eviction candidate (lowest frequency)
@@ -235,11 +235,11 @@ mod tests {
 
         // 3 Reads
         for _ in 0..3 {
-            policy.on_access(&1, false);
+            policy.on_access(&1, CacheAccess::READ);
         }
 
         // 1 Write
-        policy.on_access(&2, true);
+        policy.on_access(&2, CacheAccess::WRITE);
 
         // Key 1 should be evicted even though it has more total accesses, because the write weight
         // for Key 2 is much higher.

@@ -8,7 +8,7 @@ use super::{
 use crate::{
     allocator::{Action, SegmentAllocator, SegmentId, SEGMENT_SIZE},
     buffer::Buf,
-    cache::{Cache, ChangeKeyError, RemoveError},
+    cache::{Cache, CacheAccess, ChangeKeyError, RemoveError},
     checksum::{Builder, Checksum, State},
     compression::CompressionBuilder,
     data_management::{CopyOnWriteReason, IntegrityMode},
@@ -207,7 +207,9 @@ where
                 return Ok(None);
             }
             self.modified_info.lock().insert(mid, info);
-            cache.get(&ObjectKey::Modified(mid), false).unwrap()
+            cache
+                .get(&ObjectKey::Modified(mid), false, CacheAccess::WRITE)
+                .unwrap()
         };
         let obj = CacheValueRef::write(entry);
 
@@ -333,7 +335,7 @@ where
         if !cache.contains_key(&key) {
             cache.insert(key, object, size);
         }
-        cache.get(&key, false).unwrap()
+        cache.get(&key, false, CacheAccess::WRITE).unwrap()
     }
 
     fn evict(&self, mut cache: RwLockWriteGuard<E>) -> Result<(), Error> {
@@ -398,7 +400,9 @@ where
 
         let size = object.value_mut().get_mut().cache_size();
         cache.insert(ObjectKey::InWriteback(mid), object, size);
-        let entry = cache.get(&ObjectKey::InWriteback(mid), false).unwrap();
+        let entry = cache
+            .get(&ObjectKey::InWriteback(mid), false, CacheAccess::WRITE)
+            .unwrap();
 
         let pk = entry.tag().clone();
         drop(cache);
@@ -773,7 +777,7 @@ where
             return match result {
                 Ok(()) => Ok(Some(
                     cache
-                        .get(&ObjectKey::InWriteback(mid), false)
+                        .get(&ObjectKey::InWriteback(mid), false, CacheAccess::WRITE)
                         .map(CacheValueRef::write)
                         .unwrap(),
                 )),
@@ -814,8 +818,8 @@ where
     fn try_get(&self, or: &Self::ObjectRef) -> Option<Self::CacheValueRef> {
         let result = {
             // Drop order important
-            let cache = self.cache.read();
-            cache.get(&or.as_key(), false)
+            let mut cache = self.cache.write();
+            cache.get(&or.as_key(), false, CacheAccess::READ)
         };
         result.map(CacheValueRef::read)
     }
@@ -823,8 +827,8 @@ where
     fn try_get_mut(&self, or: &Self::ObjectRef) -> Option<Self::CacheValueRefMut> {
         if let ObjRef::Modified(..) = *or {
             let result = {
-                let cache = self.cache.read();
-                cache.get(&or.as_key(), true)
+                let mut cache = self.cache.write();
+                cache.get(&or.as_key(), true, CacheAccess::WRITE)
             };
             result.map(CacheValueRef::write)
         } else {
@@ -833,9 +837,9 @@ where
     }
 
     fn get(&self, or: &mut Self::ObjectRef) -> Result<Self::CacheValueRef, Error> {
-        let mut cache = self.cache.read();
+        let mut cache = self.cache.write();
         loop {
-            if let Some(entry) = cache.get(&or.as_key(), true) {
+            if let Some(entry) = cache.get(&or.as_key(), true, CacheAccess::READ) {
                 drop(cache);
                 return Ok(CacheValueRef::read(entry));
             }
@@ -855,7 +859,7 @@ where
                         obj.set_system_storage_preference(pref)
                     }
                 }
-                cache = self.cache.read();
+                cache = self.cache.write();
             } else {
                 self.fix_or(or);
             }
@@ -918,7 +922,7 @@ where
                 TaggedCacheValue::new(RwLock::new(object), pk.clone()),
                 size,
             );
-            cache.get(&key, false).unwrap()
+            cache.get(&key, false, CacheAccess::WRITE).unwrap()
         };
         (CacheValueRef::write(entry), ObjRef::Modified(mid, pk))
     }

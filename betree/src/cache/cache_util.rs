@@ -9,6 +9,12 @@ use std::{
 
 use crate::{cache::AddSize, cache::StableDeref, cache::Stats, size::SizeMut};
 
+#[derive(PartialEq)]
+pub enum CacheAccess {
+    READ,
+    WRITE,
+}
+
 pub struct CacheEntry<V> {
     pub value: V,
     pub referenced: AtomicBool,
@@ -17,14 +23,14 @@ pub struct CacheEntry<V> {
 /// Pinned cache entry
 pub struct PinnedEntry<V: 'static> {
     pub size: &'static AtomicUsize,
-    pub entry: Arc<CacheEntry<V>>,
+    pub value: Arc<V>,
 }
 
 impl<V> Deref for PinnedEntry<V> {
     type Target = V;
 
     fn deref(&self) -> &Self::Target {
-        &self.entry.value
+        &self.value
     }
 }
 
