@@ -59,15 +59,17 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         self.lru_list.push_front(new_key);
     }
 
-    fn pick_eviction_candidate(&mut self) -> Option<&K> {
-        if self.lru_list.len() <= 1 {
-            return self.lru_list.back();
+    fn pick_eviction_candidate(
+        &mut self,
+        mut f: impl FnMut(&K) -> Option<usize>,
+    ) -> Option<(&K, usize)> {
+        for key in self.lru_list.iter().rev() {
+            if let Some(size) = f(key) {
+                return Some((key, size));
+            }
         }
 
-        let candidate = self.lru_list.pop_back()?;
-        self.lru_list.push_front(candidate);
-
-        self.lru_list.front()
+        None
     }
 
     fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>

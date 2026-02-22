@@ -48,6 +48,7 @@ pub struct WattPolicy<K> {
 }
 
 impl<K: Eq + Hash + Clone> WattPolicy<K> {
+    /// Init WATT cache policy
     pub fn new(cache_capacity_blocks: usize) -> Self {
         Self {
             history: HashMap::new(),
@@ -88,6 +89,34 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
         }
 
         max_ac_sf + (self.write_weight * max_wr_sf)
+    }
+
+    fn pick(
+        &mut self,
+        start_idx: usize,
+        mut f: impl FnMut(&K) -> Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let len = self.keys.len();
+        let n = self.sample_size.min(len);
+
+        let mut best_result: Option<(usize, usize)> = None;
+        let mut min_pv = f32::MAX;
+
+        for i in 0..n {
+            let idx = (start_idx + i) % len;
+            let key = &self.keys[idx];
+            let hist = self.history.get(key).unwrap();
+            let pv = self.calculate_pv(hist);
+
+            if pv < min_pv {
+                if let Some(size) = f(key) {
+                    min_pv = pv;
+                    best_result = Some((idx, size));
+                }
+            }
+        }
+
+        best_result
     }
 }
 
@@ -156,34 +185,27 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         }
     }
 
-    fn pick_eviction_candidate(&mut self) -> Option<&K> {
+    fn pick_eviction_candidate(
+        &mut self,
+        mut f: impl FnMut(&K) -> Option<usize>,
+    ) -> Option<(&K, usize)> {
         let len = self.keys.len();
         if len == 0 {
             return None;
         }
 
         let n = self.sample_size.min(len);
+        for _ in 0..self.max_evict_failures() {
+            // Commit to the range immediately to prevent overlapping samples between threads.
+            // fetch_add returns the PREVIOUS value.
+            let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
 
-        // Commit to the range immediately to prevent overlapping samples between threads.
-        // fetch_add returns the PREVIOUS value.
-        let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
-
-        let mut best_key_idx = start_idx;
-        let mut min_pv = f32::MAX;
-
-        for i in 0..n {
-            let idx = (start_idx + i) % len;
-            let key = &self.keys[idx];
-            let hist = self.history.get(key).unwrap();
-            let pv = self.calculate_pv(hist);
-
-            if pv < min_pv {
-                min_pv = pv;
-                best_key_idx = idx;
+            if let Some((idx, size)) = self.pick(start_idx, &mut f) {
+                return Some((&self.keys[idx], size));
             }
         }
 
-        Some(&self.keys[best_key_idx])
+        None
     }
 
     fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
@@ -224,7 +246,7 @@ mod tests {
         }
 
         // Key 2 should be the eviction candidate (lowest frequency)
-        assert_eq!(policy.pick_eviction_candidate(), Some(&2));
+        assert_eq!(policy.pick_eviction_candidate(|_| Some(1)), Some((&2, 1)));
     }
 
     #[test]
@@ -244,7 +266,7 @@ mod tests {
         // Key 1 should be evicted even though it has more total accesses, because the write weight
         // for Key 2 is much higher.
         // Depends on `DEFAULT_WRITE_WEIGHT` that this works
-        assert_eq!(policy.pick_eviction_candidate(), Some(&1));
+        assert_eq!(policy.pick_eviction_candidate(|_| Some(1)), Some((&1, 1)));
     }
 
     #[test]
@@ -254,11 +276,16 @@ mod tests {
             policy.on_add(i);
         }
 
-        let first_candidate = *policy.pick_eviction_candidate().unwrap();
+        let first_candidate = *policy.pick_eviction_candidate(|_| Some(1)).unwrap().0;
         assert!(first_candidate < DEFAULT_SAMPLE_SIZE);
 
-        let second_candidate = *policy.pick_eviction_candidate().unwrap();
-        assert!(second_candidate >= DEFAULT_SAMPLE_SIZE);
+        let second_candidate = *policy.pick_eviction_candidate(|_| Some(1)).unwrap().0;
+        assert!(
+            second_candidate >= DEFAULT_SAMPLE_SIZE,
+            "{} <= {} : FALSE",
+            second_candidate,
+            DEFAULT_SAMPLE_SIZE
+        );
         assert!(second_candidate < 2 * DEFAULT_SAMPLE_SIZE);
     }
 }

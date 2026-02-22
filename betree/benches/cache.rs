@@ -1,5 +1,5 @@
 use betree_storage_stack::{
-    cache::{Cache, ClockCachePolicy, HashmapCache},
+    cache::{Cache, CacheAccess, ClockCachePolicy, HashmapCache},
     storage_pool::DiskOffset,
     vdev::Block,
 };
@@ -10,7 +10,7 @@ fn get_and_pin(b: &mut Bencher) {
     let mut c = HashmapCache::new(Box::new(ClockCachePolicy::new()), 5);
     c.insert(five, five, 1);
     b.iter(|| {
-        black_box(c.get(&five, true));
+        black_box(c.get(&five, true, CacheAccess::READ));
     });
 }
 
