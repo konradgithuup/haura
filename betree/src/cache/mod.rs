@@ -165,6 +165,7 @@ mod clock;
 mod clock_policy;
 mod hashmap_cache;
 mod lru_policy;
+mod random_policy;
 mod test;
 mod watt_policy;
 use crate::cache::cache_policy::CachePolicy;

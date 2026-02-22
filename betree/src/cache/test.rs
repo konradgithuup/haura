@@ -5,13 +5,14 @@ mod cache_tests {
     use crate::{
         cache::{
             cache_policy::CachePolicy, clock_policy::ClockCachePolicy, lru_policy::LRUCachePolicy,
-            Cache, HashmapCache, WattPolicy,
+            random_policy::RandomCachePolicy, Cache, HashmapCache, WattPolicy,
         },
         size::SizeMut,
     };
 
     /// Insertions of new values should always work, even if capacity is exceeded.
     #[rstest]
+    #[case(RandomCachePolicy::new())]
     #[case(LRUCachePolicy::new())]
     #[case(ClockCachePolicy::new())]
     #[case(WattPolicy::new(100))]
@@ -43,6 +44,8 @@ mod cache_tests {
     /// Insertions of existing values should panic
     #[rstest]
     #[should_panic]
+    #[case(RandomCachePolicy::new())]
+    #[should_panic]
     #[case(LRUCachePolicy::new())]
     #[should_panic]
     #[case(ClockCachePolicy::new())]
@@ -64,6 +67,7 @@ mod cache_tests {
     }
 
     #[rstest]
+    #[case(RandomCachePolicy::new())]
     #[case(LRUCachePolicy::new())]
     #[case(ClockCachePolicy::new())]
     #[case(WattPolicy::new(100))]
@@ -105,6 +109,7 @@ mod cache_tests {
 
     /// The cache policy should provide new eviction candidates if possible.
     #[rstest]
+    #[case(RandomCachePolicy::new())]
     #[case(ClockCachePolicy::new())]
     #[case(LRUCachePolicy::new())]
     #[case(WattPolicy::new(100))]
