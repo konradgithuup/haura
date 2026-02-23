@@ -39,8 +39,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
     }
 
     fn on_access(&mut self, accessed_key: &K, _access: CacheAccess) {
-        let is_ref = self.ref_map.get(accessed_key).unwrap();
-        is_ref.store(true, Ordering::Relaxed);
+        if let Some(is_ref) = self.ref_map.get(accessed_key) {
+            is_ref.store(true, Ordering::Relaxed);
+        }
     }
 
     fn on_add(&mut self, added_key: K) {
