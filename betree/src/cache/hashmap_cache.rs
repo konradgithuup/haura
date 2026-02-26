@@ -199,7 +199,7 @@ where
         //let mut policy = second_ref.get_policy_ref()?;
 
         let (key, size) = match self.policy.pick_eviction_candidate(|k| {
-            let entry = self.map.get_mut(k).unwrap();
+            let entry = self.map.get_mut(k)?;
 
             match Arc::get_mut(entry) {
                 Some(value) => f(k, value, &|map_key| second_ref.contains_key(map_key)),

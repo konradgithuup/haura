@@ -54,9 +54,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCach
     }
 
     fn update(&mut self, old_key: &K, new_key: K) {
-        if let Some(idx) = self.inner.iter().position(|k| k == old_key) {
-            _ = std::mem::replace(&mut self.inner[idx], new_key);
-        }
+        self.inner.retain(|key| key != old_key);
+        self.inner.push(new_key);
     }
 
     fn pick_eviction_candidate(

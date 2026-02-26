@@ -1,23 +1,10 @@
 //! This module provides the Database Layer.
 use crate::{
-    atomic_option::AtomicOption,
-    cache::{ClockCachePolicy, HashmapCache},
-    checksum::GxHash,
-    compression::CompressionConfiguration,
-    cow_bytes::SlicedCowBytes,
-    data_management::{self, Dml, DmlWithReport, DmlWithStorageHints, Dmu, TaggedCacheValue},
-    metrics::{metrics_init, MetricsConfiguration},
-    migration::{DatabaseMsg, DmlMsg, GlobalObjectId, MigrationPolicies},
-    size::StaticSize,
-    storage_pool::{
-        DiskOffset, StoragePoolConfiguration, StoragePoolLayer, StoragePoolUnit,
-        NUM_STORAGE_CLASSES,
-    },
-    tree::{
+    StoragePreference, atomic_option::AtomicOption, cache::{CachePolicy, ClockCachePolicy, HashmapCache, LRUCachePolicy, RandomCachePolicy, WattPolicy}, checksum::GxHash, compression::CompressionConfiguration, cow_bytes::SlicedCowBytes, data_management::{self, Dml, DmlWithReport, DmlWithStorageHints, Dmu, TaggedCacheValue, impls::ObjectKey}, metrics::{MetricsConfiguration, metrics_init}, migration::{DatabaseMsg, DmlMsg, GlobalObjectId, MigrationPolicies}, size::StaticSize, storage_pool::{
+        DiskOffset, NUM_STORAGE_CLASSES, StoragePoolConfiguration, StoragePoolLayer, StoragePoolUnit
+    }, tree::{
         DefaultMessageAction, ErasedTreeSync, Inner as TreeInner, Node, PivotKey, Tree, TreeLayer,
-    },
-    vdev::Block,
-    StoragePreference,
+    }, vdev::Block
 };
 use bincode::{deserialize, serialize_into};
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
@@ -79,7 +66,7 @@ pub(crate) type RootDmu = Dmu<
     HashmapCache<
         data_management::impls::ObjectKey<Generation>,
         TaggedCacheValue<RwLock<Object>, PivotKey>,
-        ClockCachePolicy<data_management::impls::ObjectKey<Generation>>,
+        WattPolicy<data_management::impls::ObjectKey<Generation>>,
     >,
     RootSpu,
 >;
@@ -113,6 +100,19 @@ pub enum SyncMode {
     },
 }
 
+/// Determines the cache policy used by the DMU's cache
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Policy {
+    /// Random cache policy
+    Random,
+    /// Clock
+    Clock,
+    /// Least Recently Used
+    LRU,
+    /// Write Aware Timestamp Tracking
+    WATT
+}
+
 /// A bundle type of component configuration types, used during [Database::build]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
@@ -141,6 +141,9 @@ pub struct DatabaseConfiguration {
     /// Whether to check for and open an existing database, or overwrite it
     pub access_mode: AccessMode,
 
+    /// Which cache policy to use
+    pub cache_policy: Policy,
+
     /// When set, try to sync all datasets every `sync_interval_ms` milliseconds
     pub sync_interval_ms: Option<u64>,
 
@@ -165,6 +168,7 @@ impl Default for DatabaseConfiguration {
             cache_size: DEFAULT_CACHE_SIZE,
             access_mode: AccessMode::OpenIfExists,
             sync_interval_ms: Some(DEFAULT_SYNC_INTERVAL_MS),
+            cache_policy: Policy::Clock,
             metrics: None,
             migration_policy: None,
             allocation_log_file_path: PathBuf::from("allocation_log.bin"),
@@ -225,6 +229,10 @@ impl DatabaseConfiguration {
         }
     }
 
+    fn init_policy(&self) -> impl CachePolicy<ObjectKey<Generation>> {
+        return RandomCachePolicy::new();
+    }
+
     /// Create a new [Dmu] instance. This is the third step of the DB initialization.
     pub fn new_dmu(&self, spu: RootSpu, handler: DbHandler) -> RootDmu {
         let mut strategy: [[Option<u8>; NUM_STORAGE_CLASSES]; NUM_STORAGE_CLASSES] =
@@ -247,7 +255,7 @@ impl DatabaseConfiguration {
             self.default_storage_class,
             spu,
             strategy,
-            HashmapCache::new(Box::new(ClockCachePolicy::new()), self.cache_size),
+            HashmapCache::new(Box::new(WattPolicy::new(self.cache_size / 4096)), self.cache_size),
             handler,
             #[cfg(feature = "allocation_log")]
             self.allocation_log_file_path.clone(),

@@ -168,9 +168,11 @@ mod lru_policy;
 mod random_policy;
 mod test;
 mod watt_policy;
-use crate::cache::cache_policy::CachePolicy;
 
 pub use self::cache_util::CacheAccess;
+pub use self::cache_policy::CachePolicy;
 pub use self::clock_policy::ClockCachePolicy;
-pub use self::hashmap_cache::HashmapCache;
+pub use self::random_policy::RandomCachePolicy;
+pub use self::lru_policy::LRUCachePolicy;
 pub use self::watt_policy::WattPolicy;
+pub use self::hashmap_cache::HashmapCache;
