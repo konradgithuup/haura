@@ -291,10 +291,10 @@ impl<C: Checksum> StoragePoolLayer for StoragePoolUnit<C> {
 
 #[derive(serde::Serialize)]
 pub struct StoragePoolMetrics {
-    tiers: [Option<StorageTierMetrics>; NUM_STORAGE_CLASSES],
+    pub tiers: [Option<StorageTierMetrics>; NUM_STORAGE_CLASSES],
 }
 
 #[derive(serde::Serialize)]
 pub struct StorageTierMetrics {
-    vdevs: Vec<vdev::Statistics>,
+    pub vdevs: Vec<vdev::Statistics>,
 }
