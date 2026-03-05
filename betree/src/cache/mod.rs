@@ -43,10 +43,9 @@ pub trait Cache: Send + Sync {
     /// The cache entry type for the cache.
     type Value;
     /// The cache policy to be used
-    type Policy: CachePolicy<Self::Key>;
 
     /// Constructs a new instance with the given `capacity` in bytes.
-    fn new(capacity: usize, policy: Box<Self::Policy>) -> Self;
+    fn new(capacity: usize, policy: Box<dyn CachePolicy<Self::Key>>) -> Self;
 
     /// The value returned by `get`. Holds a reference to the actual cache
     /// entry.
@@ -106,9 +105,10 @@ pub trait Cache: Send + Sync {
     /// if the cache should not grow beyond the capacity bound.
     fn insert(&mut self, key: Self::Key, value: Self::Value, size: usize);
 
-    /// Returns an iterator that iterates over the cache entry keys in order
-    /// from old to new.
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Self::Key> + 'a>;
+    /// Drop all entries of the cache that match the provided predicate.
+    fn drop_entries<F>(&mut self, removal_predicate: F)
+    where
+        F: FnMut(&Self::Key) -> bool;
 
     /// Returns the total size of all cache entries.
     fn size(&self) -> usize;

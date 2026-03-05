@@ -12,13 +12,13 @@ mod cache_tests {
 
     /// Insertions of new values should always work, even if capacity is exceeded.
     #[rstest]
-    #[case(RandomCachePolicy::new())]
-    #[case(LRUCachePolicy::new())]
-    #[case(ClockCachePolicy::new())]
-    #[case(WattPolicy::new(100))]
-    fn test_insert_exceeding_cap<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(LRUCachePolicy::new()))]
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_insert_exceeding_cap(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         assert!(cache.size() == 0);
 
@@ -44,16 +44,16 @@ mod cache_tests {
     /// Insertions of existing values should panic
     #[rstest]
     #[should_panic]
-    #[case(RandomCachePolicy::new())]
+    #[case(Box::new(RandomCachePolicy::new()))]
     #[should_panic]
-    #[case(LRUCachePolicy::new())]
+    #[case(Box::new(LRUCachePolicy::new()))]
     #[should_panic]
-    #[case(ClockCachePolicy::new())]
+    #[case(Box::new(ClockCachePolicy::new()))]
     #[should_panic]
-    #[case(WattPolicy::new(100))]
-    fn test_insert_duplicate<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_insert_duplicate(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         assert!(cache.size() == 0);
 
@@ -67,13 +67,13 @@ mod cache_tests {
     }
 
     #[rstest]
-    #[case(RandomCachePolicy::new())]
-    #[case(LRUCachePolicy::new())]
-    #[case(ClockCachePolicy::new())]
-    #[case(WattPolicy::new(100))]
-    fn test_remove<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(LRUCachePolicy::new()))]
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_remove(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         cache.insert(1, TestVal {}, 1);
         assert!(cache.size() == 1);
@@ -90,12 +90,12 @@ mod cache_tests {
     }
 
     #[rstest]
-    #[case(ClockCachePolicy::new(), 0)]
-    #[case(LRUCachePolicy::new(), 0)]
-    #[case(WattPolicy::new(100), 0)]
-    fn test_evict<P: CachePolicy<u64>>(#[case] policy: P, #[case] evicted_key: u64) {
+    #[case(Box::new(ClockCachePolicy::new()), 0)]
+    #[case(Box::new(LRUCachePolicy::new()), 0)]
+    #[case(Box::new(WattPolicy::new(100)), 0)]
+    fn test_evict(#[case] policy: Box<dyn CachePolicy<u64>>, #[case] evicted_key: u64) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         cache.insert(0, TestVal {}, 1);
         cache.insert(1, TestVal {}, 1);
@@ -109,13 +109,13 @@ mod cache_tests {
 
     /// The cache policy should provide new eviction candidates if possible.
     #[rstest]
-    #[case(RandomCachePolicy::new())]
-    #[case(ClockCachePolicy::new())]
-    #[case(LRUCachePolicy::new())]
-    #[case(WattPolicy::new(100))]
-    fn test_evict_skip<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(LRUCachePolicy::new()))]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_evict_skip(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         cache.insert(0, TestVal {}, 1);
         cache.insert(1, TestVal {}, 1);

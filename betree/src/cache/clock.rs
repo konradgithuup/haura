@@ -1,7 +1,5 @@
 use std::{marker::PhantomData, ptr::NonNull};
 
-use crate::cache::cache_policy::CacheIterator;
-
 struct ClockEntry<T> {
     value: T,
     next: NonNull<ClockEntry<T>>,
@@ -169,8 +167,6 @@ pub struct ClockIter<'a, T: 'a> {
     pub(crate) last: NonNull<ClockEntry<T>>,
     pub(crate) marker: PhantomData<&'a T>,
 }
-
-impl<'a, T> CacheIterator<'a, T> for ClockIter<'a, T> {}
 
 impl<'a, T: 'a> Iterator for ClockIter<'a, T> {
     type Item = &'a T;

@@ -2,12 +2,12 @@
 //!
 //! LRU is implemented on a doubly linked list.
 
-use std::{hash::Hash, slice::Iter};
+use std::hash::Hash;
 
 use rand::random;
 
 use crate::cache::{
-    cache_policy::{CacheIterator, CachePolicy},
+    cache_policy::CachePolicy,
     CacheAccess, RemoveError,
 };
 
@@ -60,7 +60,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCach
 
     fn pick_eviction_candidate(
         &mut self,
-        mut f: impl FnMut(&K) -> Option<usize>,
+        f: &mut dyn FnMut(&K) -> Option<usize>,
     ) -> Option<(&K, usize)> {
         let len = self.max_evict_failures();
         let random_offset = random::<usize>() % len;
@@ -73,28 +73,5 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCach
         }
 
         None
-    }
-
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
-    where
-        K: 'a,
-    {
-        RandomIterator {
-            iter: self.inner.iter(),
-        }
-    }
-}
-
-struct RandomIterator<'a, T> {
-    iter: Iter<'a, T>,
-}
-
-impl<'a, T> CacheIterator<'a, T> for RandomIterator<'a, T> {}
-
-impl<'a, T: 'a> Iterator for RandomIterator<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
     }
 }

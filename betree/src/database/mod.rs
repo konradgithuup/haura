@@ -14,14 +14,9 @@ use parking_lot::{Mutex, RwLock};
 use seqlock::SeqLock;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    iter::FromIterator,
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    thread,
+    collections::HashMap, default, iter::FromIterator, path::{Path, PathBuf}, sync::{
+        Arc, atomic::{AtomicU64, Ordering}
+    }, thread
 };
 
 mod dataset;
@@ -65,8 +60,7 @@ pub(crate) type RootSpu = StoragePoolUnit<Checksum>;
 pub(crate) type RootDmu = Dmu<
     HashmapCache<
         data_management::impls::ObjectKey<Generation>,
-        TaggedCacheValue<RwLock<Object>, PivotKey>,
-        WattPolicy<data_management::impls::ObjectKey<Generation>>,
+        TaggedCacheValue<RwLock<Object>, PivotKey>
     >,
     RootSpu,
 >;
@@ -229,8 +223,13 @@ impl DatabaseConfiguration {
         }
     }
 
-    fn init_policy(&self) -> impl CachePolicy<ObjectKey<Generation>> {
-        return RandomCachePolicy::new();
+    fn init_policy(&self) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
+        match self.cache_policy {
+            Policy::Clock => Box::new(ClockCachePolicy::new()),
+            Policy::LRU => Box::new(LRUCachePolicy::new()),
+            Policy::WATT => Box::new(WattPolicy::new(100)),
+            Policy::Random => Box::new(RandomCachePolicy::new()),
+        }
     }
 
     /// Create a new [Dmu] instance. This is the third step of the DB initialization.
@@ -255,7 +254,7 @@ impl DatabaseConfiguration {
             self.default_storage_class,
             spu,
             strategy,
-            HashmapCache::new(Box::new(WattPolicy::new(self.cache_size / 4096)), self.cache_size),
+            HashmapCache::new(Box::new(ClockCachePolicy::new()), self.cache_size),
             handler,
             #[cfg(feature = "allocation_log")]
             self.allocation_log_file_path.clone(),

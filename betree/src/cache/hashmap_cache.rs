@@ -5,26 +5,25 @@
 use super::{Cache, ChangeKeyError, RemoveError};
 use crate::{
     cache::{
-        cache_policy::{CacheIterator, CachePolicy},
-        cache_util::{CacheEntry, CacheStats, PinnedEntry},
+        cache_policy::CachePolicy,
+        cache_util::{CacheStats, PinnedEntry},
         CacheAccess,
     },
     size::SizeMut,
 };
 use std::{
-    cell::RefCell,
     collections::HashMap,
     hash::Hash,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,
     },
 };
 
 /// A cache based on a `std::collections::HashMap` and a given `CachePolicy`.
-pub struct HashmapCache<K, V, P> {
+pub struct HashmapCache<K, V> {
     map: HashMap<K, Arc<V>>,
-    policy: Box<P>,
+    policy: Box<dyn CachePolicy<K>>,
     capacity: usize,
     // Let's leak it
     size: &'static AtomicUsize,
@@ -35,9 +34,9 @@ pub struct HashmapCache<K, V, P> {
     removals: u64,
 }
 
-impl<'a, K: 'a + Hash + Eq, V: SizeMut, P: CachePolicy<K>> HashmapCache<K, V, P> {
+impl<'a, K: 'a + Hash + Eq, V: SizeMut> HashmapCache<K, V> {
     /// Returns a new cache instance with the given `capacity`.
-    pub fn new(cache_policy: Box<P>, capacity: usize) -> Self {
+    pub fn new(cache_policy: Box<dyn CachePolicy<K>>, capacity: usize) -> Self {
         HashmapCache {
             map: Default::default(),
             policy: cache_policy,
@@ -52,7 +51,7 @@ impl<'a, K: 'a + Hash + Eq, V: SizeMut, P: CachePolicy<K>> HashmapCache<K, V, P>
     }
 }
 
-impl<K, V, P> HashmapCache<K, V, P> {
+impl<K, V> HashmapCache<K, V> {
     // allows mutable policy access using &self (necessary for self::get)
     /*fn get_policy_ref(&self) -> Option<RwLockWriteGuard<'_, Box<P>>> {
         match self.policy.try_write() {
@@ -65,19 +64,17 @@ impl<K, V, P> HashmapCache<K, V, P> {
     }*/
 }
 
-impl<K, V, P> Cache for HashmapCache<K, V, P>
+impl<K, V> Cache for HashmapCache<K, V>
 where
     K: Clone + Sized + Eq + Hash + Send + Sync + 'static,
     V: Sync + Send + SizeMut + 'static,
-    P: CachePolicy<K>,
 {
     type Key = K;
     type Value = V;
-    type Policy = P;
     type ValueRef = PinnedEntry<V>;
     type Stats = CacheStats;
 
-    fn new(capacity: usize, policy: Box<P>) -> Self {
+    fn new(capacity: usize, policy: Box<dyn CachePolicy<K>>) -> Self {
         Self::new(policy, capacity)
     }
 
@@ -198,7 +195,7 @@ where
         // let policy determine best eviction entry
         //let mut policy = second_ref.get_policy_ref()?;
 
-        let (key, size) = match self.policy.pick_eviction_candidate(|k| {
+        let (key, size) = match self.policy.pick_eviction_candidate(&mut |k| {
             let entry = self.map.get_mut(k)?;
 
             match Arc::get_mut(entry) {
@@ -267,8 +264,14 @@ where
         }
     }
 
-    fn iter<'b>(&'b self) -> Box<dyn Iterator<Item = &'b K> + 'b> {
-        Box::new(self.policy.iter())
+    fn drop_entries<F>(&mut self, mut removal_predicate: F)
+    where
+        F: FnMut(&Self::Key) -> bool {
+        self.map.extract_if(|k, _| {
+            removal_predicate(k)
+        }).for_each(|(removed_key, _)| {
+            self.policy.on_remove(&removed_key);
+        });
     }
 
     fn size(&self) -> usize {

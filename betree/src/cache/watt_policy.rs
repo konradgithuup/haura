@@ -1,5 +1,5 @@
 //! This module provides the Write-Aware Timestamp Tracking (WATT) cache policy.
-use crate::cache::cache_policy::{CacheIterator, CachePolicy};
+use crate::cache::cache_policy::CachePolicy;
 use crate::cache::{CacheAccess, RemoveError};
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -187,7 +187,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
 
     fn pick_eviction_candidate(
         &mut self,
-        mut f: impl FnMut(&K) -> Option<usize>,
+        mut f: &mut dyn FnMut(&K) -> Option<usize>,
     ) -> Option<(&K, usize)> {
         let len = self.keys.len();
         if len == 0 {
@@ -207,29 +207,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
 
         None
     }
-
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
-    where
-        K: 'a,
-    {
-        WattIter {
-            inner: self.keys.iter(),
-        }
-    }
 }
-
-struct WattIter<'a, K> {
-    inner: std::slice::Iter<'a, K>,
-}
-
-impl<'a, K: 'a> Iterator for WattIter<'a, K> {
-    type Item = &'a K;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-}
-
-impl<'a, K: 'a> CacheIterator<'a, K> for WattIter<'a, K> {}
 
 #[cfg(test)]
 mod tests {
@@ -246,7 +224,7 @@ mod tests {
         }
 
         // Key 2 should be the eviction candidate (lowest frequency)
-        assert_eq!(policy.pick_eviction_candidate(|_| Some(1)), Some((&2, 1)));
+        assert_eq!(policy.pick_eviction_candidate(&mut |_| Some(1)), Some((&2, 1)));
     }
 
     #[test]
@@ -266,7 +244,7 @@ mod tests {
         // Key 1 should be evicted even though it has more total accesses, because the write weight
         // for Key 2 is much higher.
         // Depends on `DEFAULT_WRITE_WEIGHT` that this works
-        assert_eq!(policy.pick_eviction_candidate(|_| Some(1)), Some((&1, 1)));
+        assert_eq!(policy.pick_eviction_candidate(&mut |_| Some(1)), Some((&1, 1)));
     }
 
     #[test]
@@ -276,10 +254,10 @@ mod tests {
             policy.on_add(i);
         }
 
-        let first_candidate = *policy.pick_eviction_candidate(|_| Some(1)).unwrap().0;
+        let first_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(first_candidate < DEFAULT_SAMPLE_SIZE);
 
-        let second_candidate = *policy.pick_eviction_candidate(|_| Some(1)).unwrap().0;
+        let second_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(
             second_candidate >= DEFAULT_SAMPLE_SIZE,
             "{} <= {} : FALSE",

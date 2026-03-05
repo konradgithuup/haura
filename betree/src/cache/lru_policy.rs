@@ -3,12 +3,12 @@
 //! LRU is implemented on a doubly linked list.
 
 use std::{
-    collections::{linked_list::Iter, LinkedList},
+    collections::LinkedList,
     hash::Hash,
 };
 
 use crate::cache::{
-    cache_policy::{CacheIterator, CachePolicy},
+    cache_policy::CachePolicy,
     CacheAccess, RemoveError,
 };
 
@@ -61,7 +61,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
 
     fn pick_eviction_candidate(
         &mut self,
-        mut f: impl FnMut(&K) -> Option<usize>,
+        f: &mut dyn FnMut(&K) -> Option<usize>,
     ) -> Option<(&K, usize)> {
         for key in self.lru_list.iter().rev() {
             if let Some(size) = f(key) {
@@ -70,28 +70,5 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         }
 
         None
-    }
-
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
-    where
-        K: 'a,
-    {
-        LRUIterator {
-            iter: self.lru_list.iter(),
-        }
-    }
-}
-
-struct LRUIterator<'a, T> {
-    iter: Iter<'a, T>,
-}
-
-impl<'a, T> CacheIterator<'a, T> for LRUIterator<'a, T> {}
-
-impl<'a, T: 'a> Iterator for LRUIterator<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
     }
 }

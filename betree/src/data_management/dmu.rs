@@ -6,7 +6,7 @@ use super::{
     CopyOnWriteEvent, Dml, HasStoragePreference, Object, ObjectReference,
 };
 use crate::{
-    allocator::{Action, SegmentAllocator, SegmentId, SEGMENT_SIZE},
+    allocator::{Action, SegmentId},
     buffer::Buf,
     cache::{Cache, CacheAccess, ChangeKeyError, RemoveError},
     checksum::{Builder, Checksum, State},
@@ -17,21 +17,17 @@ use crate::{
     size::{Size, SizeMut, StaticSize},
     storage_pool::{DiskOffset, StoragePoolLayer, NUM_STORAGE_CLASSES},
     tree::{Node, PivotKey},
-    vdev::{Block, File, BLOCK_SIZE},
+    vdev::{Block, BLOCK_SIZE},
     StoragePreference,
 };
-use byteorder::{LittleEndian, WriteBytesExt};
 use crossbeam_channel::Sender;
 use futures::{executor::block_on, future::ok, prelude::*};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
-    arch::x86_64::{__rdtscp, _rdtsc},
+    arch::x86_64::_rdtsc,
     collections::HashMap,
-    fs::OpenOptions,
-    io::{BufWriter, Write},
     mem::replace,
     ops::DerefMut,
-    path::PathBuf,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -1099,14 +1095,7 @@ where
 
     fn drop_cache(&self) {
         let mut cache = self.cache.write();
-        let keys: Vec<_> = cache
-            .iter()
-            .cloned()
-            .filter(|&key| matches!(key, ObjectKey::Unmodified { .. }))
-            .collect();
-        for key in keys {
-            let _ = cache.remove(&key, |obj| obj.cache_size());
-        }
+        cache.drop_entries(|k| matches!(k, ObjectKey::Unmodified { .. }));
     }
 }
 

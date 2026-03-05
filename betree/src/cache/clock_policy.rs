@@ -8,8 +8,8 @@ use std::{
 use gxhash::HashMap;
 
 use crate::cache::{
-    cache_policy::{CacheIterator, CachePolicy},
-    clock::{Clock, ClockIter},
+    cache_policy::CachePolicy,
+    clock::Clock,
     CacheAccess,
 };
 
@@ -63,7 +63,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
 
     fn pick_eviction_candidate(
         &mut self,
-        mut f: impl FnMut(&K) -> Option<usize>,
+        f: &mut dyn FnMut(&K) -> Option<usize>,
     ) -> Option<(&K, usize)> {
         for _ in 0..self.max_evict_failures() {
             let key = self.clock.peek_front().cloned()?;
@@ -81,40 +81,5 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
         }
 
         None
-    }
-
-    fn iter<'a>(&'a self) -> impl super::cache_policy::CacheIterator<'a, K>
-    where
-        K: 'a,
-    {
-        self.clock.iter()
-    }
-}
-
-struct ClockCacheEntry<K> {
-    pub key: K,
-    pub referenced: AtomicBool,
-}
-
-impl<K> ClockCacheEntry<K> {
-    fn new(key: K) -> ClockCacheEntry<K> {
-        ClockCacheEntry {
-            key,
-            referenced: AtomicBool::new(false),
-        }
-    }
-}
-
-struct ClockCacheIterator<'a, K> {
-    iter: ClockIter<'a, ClockCacheEntry<K>>,
-}
-
-impl<'a, K> CacheIterator<'a, K> for ClockCacheIterator<'a, K> {}
-
-impl<'a, K: 'a> Iterator for ClockCacheIterator<'a, K> {
-    type Item = &'a K;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().map(|e| &(e.key))
     }
 }
