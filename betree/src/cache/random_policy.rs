@@ -6,10 +6,7 @@ use std::hash::Hash;
 
 use rand::random;
 
-use crate::cache::{
-    cache_policy::CachePolicy,
-    CacheAccess, RemoveError,
-};
+use crate::cache::{cache_policy::CachePolicy, CacheAccess, RemoveError};
 
 /// Implements an LRU Cache Policy ontop of a doubly linked list.
 /// Keys are added at the front. On eviction, the tail is evicted.
@@ -28,7 +25,7 @@ impl<K: Hash + Eq> RandomCachePolicy<K> {
 
 impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCachePolicy<K> {
     fn name(&self) -> &'static str {
-        "LRU"
+        "Random"
     }
 
     fn max_evict_failures(&self) -> usize {

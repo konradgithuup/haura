@@ -1,10 +1,27 @@
 //! This module provides the Database Layer.
 use crate::{
-    StoragePreference, atomic_option::AtomicOption, cache::{CachePolicy, ClockCachePolicy, HashmapCache, LRUCachePolicy, RandomCachePolicy, WattPolicy}, checksum::GxHash, compression::CompressionConfiguration, cow_bytes::SlicedCowBytes, data_management::{self, Dml, DmlWithReport, DmlWithStorageHints, Dmu, TaggedCacheValue, impls::ObjectKey}, metrics::{MetricsConfiguration, metrics_init}, migration::{DatabaseMsg, DmlMsg, GlobalObjectId, MigrationPolicies}, size::StaticSize, storage_pool::{
-        DiskOffset, NUM_STORAGE_CLASSES, StoragePoolConfiguration, StoragePoolLayer, StoragePoolUnit
-    }, tree::{
+    atomic_option::AtomicOption,
+    cache::{
+        CachePolicy, ClockCachePolicy, HashmapCache, LRUCachePolicy, RandomCachePolicy, WattPolicy,
+    },
+    checksum::GxHash,
+    compression::CompressionConfiguration,
+    cow_bytes::SlicedCowBytes,
+    data_management::{
+        self, impls::ObjectKey, Dml, DmlWithReport, DmlWithStorageHints, Dmu, TaggedCacheValue,
+    },
+    metrics::{metrics_init, MetricsConfiguration},
+    migration::{DatabaseMsg, DmlMsg, GlobalObjectId, MigrationPolicies},
+    size::StaticSize,
+    storage_pool::{
+        DiskOffset, StoragePoolConfiguration, StoragePoolLayer, StoragePoolUnit,
+        NUM_STORAGE_CLASSES,
+    },
+    tree::{
         DefaultMessageAction, ErasedTreeSync, Inner as TreeInner, Node, PivotKey, Tree, TreeLayer,
-    }, vdev::Block
+    },
+    vdev::Block,
+    StoragePreference,
 };
 use bincode::{deserialize, serialize_into};
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
@@ -14,9 +31,15 @@ use parking_lot::{Mutex, RwLock};
 use seqlock::SeqLock;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    collections::HashMap, default, iter::FromIterator, path::{Path, PathBuf}, sync::{
-        Arc, atomic::{AtomicU64, Ordering}
-    }, thread
+    collections::HashMap,
+    default,
+    iter::FromIterator,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    thread,
 };
 
 mod dataset;
@@ -60,7 +83,7 @@ pub(crate) type RootSpu = StoragePoolUnit<Checksum>;
 pub(crate) type RootDmu = Dmu<
     HashmapCache<
         data_management::impls::ObjectKey<Generation>,
-        TaggedCacheValue<RwLock<Object>, PivotKey>
+        TaggedCacheValue<RwLock<Object>, PivotKey>,
     >,
     RootSpu,
 >;
@@ -104,7 +127,7 @@ pub enum Policy {
     /// Least Recently Used
     LRU,
     /// Write Aware Timestamp Tracking
-    WATT
+    WATT,
 }
 
 /// A bundle type of component configuration types, used during [Database::build]
@@ -248,13 +271,16 @@ impl DatabaseConfiguration {
             }
         }
 
+        let policy = self.init_policy();
+        info!("Init DMU with policy: {}", policy.name());
+
         Dmu::new(
             self.compression.to_builder(),
             <Checksum as crate::checksum::Checksum>::builder(),
             self.default_storage_class,
             spu,
             strategy,
-            HashmapCache::new(Box::new(ClockCachePolicy::new()), self.cache_size),
+            HashmapCache::new(policy, self.cache_size),
             handler,
             #[cfg(feature = "allocation_log")]
             self.allocation_log_file_path.clone(),

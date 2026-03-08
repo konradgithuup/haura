@@ -266,12 +266,13 @@ where
 
     fn drop_entries<F>(&mut self, mut removal_predicate: F)
     where
-        F: FnMut(&Self::Key) -> bool {
-        self.map.extract_if(|k, _| {
-            removal_predicate(k)
-        }).for_each(|(removed_key, _)| {
-            self.policy.on_remove(&removed_key);
-        });
+        F: FnMut(&Self::Key) -> bool,
+    {
+        self.map
+            .extract_if(|k, _| removal_predicate(k))
+            .for_each(|(removed_key, _)| {
+                self.policy.on_remove(&removed_key);
+            });
     }
 
     fn size(&self) -> usize {
