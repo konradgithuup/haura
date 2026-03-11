@@ -7,11 +7,7 @@ use std::{
 
 use gxhash::HashMap;
 
-use crate::cache::{
-    cache_policy::CachePolicy,
-    clock::Clock,
-    CacheAccess,
-};
+use crate::cache::{cache_policy::CachePolicy, clock::Clock, CacheAccess};
 
 /// Implements a Clock Cache Policy ontop of a circular linked list.
 pub struct ClockCachePolicy<K> {
@@ -64,7 +60,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
     fn pick_eviction_candidate(
         &mut self,
         f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)> {
+    ) -> Option<(K, usize)> {
         for _ in 0..self.max_evict_failures() {
             let key = self.clock.peek_front().cloned()?;
 
@@ -74,7 +70,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
             if was_referenced {
                 // pass
             } else if let Some(size) = f(&key) {
-                return Some((self.clock.peek_front()?, size));
+                return Some((key, size));
             }
 
             self.clock.next();

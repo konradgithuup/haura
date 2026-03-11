@@ -29,5 +29,5 @@ pub trait CachePolicy<K>: Sync + Send {
     fn pick_eviction_candidate(
         &mut self,
         f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)>;
+    ) -> Option<(K, usize)>;
 }

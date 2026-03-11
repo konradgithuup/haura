@@ -5,10 +5,7 @@
 use parking_lot::Mutex;
 use std::{collections::LinkedList, hash::Hash};
 
-use crate::cache::{
-    cache_policy::CachePolicy,
-    CacheAccess, RemoveError,
-};
+use crate::cache::{cache_policy::CachePolicy, CacheAccess, RemoveError};
 
 /// Implements an LRU Cache Policy ontop of a doubly linked list.
 /// Keys are added at the front. On eviction, the tail is evicted.
@@ -71,10 +68,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
     fn pick_eviction_candidate(
         &mut self,
         f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)> {
+    ) -> Option<(K, usize)> {
         for key in self.lru_list.get_mut().iter().rev() {
             if let Some(size) = f(key) {
-                return Some((key, size));
+                return Some((key.clone(), size));
             }
         }
 

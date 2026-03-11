@@ -228,7 +228,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
     fn pick_eviction_candidate(
         &mut self,
         mut f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)> {
+    ) -> Option<(K, usize)> {
         let len = self.keys.len();
         if len == 0 {
             return None;
@@ -241,7 +241,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
             let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
 
             if let Some((idx, size)) = self.pick(start_idx, &mut f) {
-                return Some((&self.keys[idx], size));
+                return Some((self.keys[idx].clone(), size));
             }
         }
 
@@ -272,7 +272,7 @@ mod tests {
         // Key 2 should be the eviction candidate (lowest frequency)
         assert_eq!(
             policy.pick_eviction_candidate(&mut |_| Some(1)),
-            Some((&2, 1))
+            Some((2, 1))
         );
     }
 
@@ -295,7 +295,7 @@ mod tests {
         // Depends on `DEFAULT_WRITE_WEIGHT` that this works
         assert_eq!(
             policy.pick_eviction_candidate(&mut |_| Some(1)),
-            Some((&1, 1))
+            Some((1, 1))
         );
     }
 
@@ -306,10 +306,10 @@ mod tests {
             policy.on_add(i);
         }
 
-        let first_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
+        let first_candidate = policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(first_candidate < DEFAULT_SAMPLE_SIZE);
 
-        let second_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
+        let second_candidate = policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(
             second_candidate >= DEFAULT_SAMPLE_SIZE,
             "{} <= {} : FALSE",
