@@ -814,7 +814,7 @@ where
     fn try_get(&self, or: &Self::ObjectRef) -> Option<Self::CacheValueRef> {
         let result = {
             // Drop order important
-            let mut cache = self.cache.write();
+            let cache = self.cache.read();
             cache.get(&or.as_key(), false, CacheAccess::READ)
         };
         result.map(CacheValueRef::read)
@@ -823,7 +823,7 @@ where
     fn try_get_mut(&self, or: &Self::ObjectRef) -> Option<Self::CacheValueRefMut> {
         if let ObjRef::Modified(..) = *or {
             let result = {
-                let mut cache = self.cache.write();
+                let cache = self.cache.read();
                 cache.get(&or.as_key(), true, CacheAccess::WRITE)
             };
             result.map(CacheValueRef::write)
@@ -833,15 +833,14 @@ where
     }
 
     fn get(&self, or: &mut Self::ObjectRef) -> Result<Self::CacheValueRef, Error> {
-        let mut cache = self.cache.write();
         loop {
+            let cache = self.cache.read();
             if let Some(entry) = cache.get(&or.as_key(), true, CacheAccess::READ) {
-                drop(cache);
                 return Ok(CacheValueRef::read(entry));
             }
-            if let ObjRef::Unmodified(ref ptr, ref pk) = *or {
-                drop(cache);
+            drop(cache);
 
+            if let ObjRef::Unmodified(ref ptr, ref pk) = *or {
                 let _ = self.fetch(ptr, pk.clone())?;
                 if let Some(report_tx) = &self.report_tx {
                     let _ = report_tx
@@ -855,7 +854,6 @@ where
                         obj.set_system_storage_preference(pref)
                     }
                 }
-                cache = self.cache.write();
             } else {
                 self.fix_or(or);
             }

@@ -11,7 +11,7 @@ pub trait CachePolicy<K>: Sync + Send {
     fn max_evict_failures(&self) -> usize;
 
     /// Updates cache policy after object access.
-    fn on_access(&mut self, accessed_key: &K, access: CacheAccess);
+    fn on_access(&self, accessed_key: &K, access: CacheAccess);
 
     /// Updates cache policy after an object is added.
     fn on_add(&mut self, added_key: K);

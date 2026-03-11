@@ -32,7 +32,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCach
         return self.inner.len();
     }
 
-    fn on_access(&mut self, _accessed_key: &K, _access: CacheAccess) {
+    fn on_access(&self, _accessed_key: &K, _access: CacheAccess) {
         // do nothing
     }
 

@@ -82,7 +82,7 @@ where
         self.map.contains_key(key)
     }
 
-    fn get(&mut self, key: &K, count_miss: bool, access: CacheAccess) -> Option<Self::ValueRef> {
+    fn get(&self, key: &K, count_miss: bool, access: CacheAccess) -> Option<Self::ValueRef> {
         if let Some(value) = self.map.get(key).cloned() {
             self.hits.fetch_add(1, Ordering::Relaxed);
 

@@ -38,7 +38,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
         self.ref_map.len() * 2
     }
 
-    fn on_access(&mut self, accessed_key: &K, _access: CacheAccess) {
+    fn on_access(&self, accessed_key: &K, _access: CacheAccess) {
         if let Some(is_ref) = self.ref_map.get(accessed_key) {
             is_ref.store(true, Ordering::Relaxed);
         }
