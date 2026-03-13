@@ -7,11 +7,7 @@ use std::{
 
 use gxhash::HashMap;
 
-use crate::cache::{
-    cache_policy::CachePolicy,
-    clock::Clock,
-    CacheAccess,
-};
+use crate::cache::{cache_policy::CachePolicy, clock::Clock, CacheAccess};
 
 /// Implements a Clock Cache Policy ontop of a circular linked list.
 pub struct ClockCachePolicy<K> {
@@ -57,8 +53,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
 
     fn update(&mut self, old_key: &K, new_key: K) {
         if let Some(entry) = self.clock.iter_mut().find(|entry| *entry == old_key) {
-            *entry = new_key;
+            *entry = new_key.clone();
         }
+        _ = self.ref_map.insert(new_key, AtomicBool::new(true));
     }
 
     fn pick_eviction_candidate(
