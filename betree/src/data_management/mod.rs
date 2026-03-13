@@ -15,7 +15,7 @@
 use crate::{
     buffer::Buf,
     cache::AddSize,
-    checksum::{Builder, Checksum},
+    checksum::Checksum,
     database::DatasetId,
     migration::DmlMsg,
     size::{Size, StaticSize},

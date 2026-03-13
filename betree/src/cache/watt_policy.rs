@@ -1,6 +1,6 @@
 //! This module provides the Write-Aware Timestamp Tracking (WATT) cache policy.
-use crate::cache::cache_policy::{CacheIterator, CachePolicy};
-use crate::cache::RemoveError;
+use crate::cache::cache_policy::CachePolicy;
+use crate::cache::{CacheAccess, RemoveError};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,6 +48,7 @@ pub struct WattPolicy<K> {
 }
 
 impl<K: Eq + Hash + Clone> WattPolicy<K> {
+    /// Init WATT cache policy
     pub fn new(cache_capacity_blocks: usize) -> Self {
         Self {
             history: HashMap::new(),
@@ -89,6 +90,34 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
 
         max_ac_sf + (self.write_weight * max_wr_sf)
     }
+
+    fn pick(
+        &mut self,
+        start_idx: usize,
+        mut f: impl FnMut(&K) -> Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let len = self.keys.len();
+        let n = self.sample_size.min(len);
+
+        let mut best_result: Option<(usize, usize)> = None;
+        let mut min_pv = f32::MAX;
+
+        for i in 0..n {
+            let idx = (start_idx + i) % len;
+            let key = &self.keys[idx];
+            let hist = self.history.get(key).unwrap();
+            let pv = self.calculate_pv(hist);
+
+            if pv < min_pv {
+                if let Some(size) = f(key) {
+                    min_pv = pv;
+                    best_result = Some((idx, size));
+                }
+            }
+        }
+
+        best_result
+    }
 }
 
 impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy<K> {
@@ -100,9 +129,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         self.keys.len()
     }
 
-    fn on_access(&mut self, accessed_key: &K, is_write: bool) {
+    fn on_access(&mut self, accessed_key: &K, access: CacheAccess) {
         if let Some(hist) = self.history.get_mut(accessed_key) {
-            if is_write {
+            if access == CacheAccess::WRITE {
                 hist.wr_head = (hist.wr_head + 1) % WRITE_HISTORY_SIZE as u8;
                 hist.write_log[hist.wr_head as usize] = self.t_now;
                 hist.wr_count = (hist.wr_count + 1).min(WRITE_HISTORY_SIZE as u8);
@@ -156,58 +185,29 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         }
     }
 
-    fn pick_eviction_candidate(&self) -> Option<&K> {
+    fn pick_eviction_candidate(
+        &mut self,
+        mut f: &mut dyn FnMut(&K) -> Option<usize>,
+    ) -> Option<(&K, usize)> {
         let len = self.keys.len();
         if len == 0 {
             return None;
         }
 
         let n = self.sample_size.min(len);
+        for _ in 0..self.max_evict_failures() {
+            // Commit to the range immediately to prevent overlapping samples between threads.
+            // fetch_add returns the PREVIOUS value.
+            let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
 
-        // Commit to the range immediately to prevent overlapping samples between threads.
-        // fetch_add returns the PREVIOUS value.
-        let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
-
-        let mut best_key_idx = start_idx;
-        let mut min_pv = f32::MAX;
-
-        for i in 0..n {
-            let idx = (start_idx + i) % len;
-            let key = &self.keys[idx];
-            let hist = self.history.get(key).unwrap();
-            let pv = self.calculate_pv(hist);
-
-            if pv < min_pv {
-                min_pv = pv;
-                best_key_idx = idx;
+            if let Some((idx, size)) = self.pick(start_idx, &mut f) {
+                return Some((&self.keys[idx], size));
             }
         }
 
-        Some(&self.keys[best_key_idx])
-    }
-
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
-    where
-        K: 'a,
-    {
-        WattIter {
-            inner: self.keys.iter(),
-        }
+        None
     }
 }
-
-struct WattIter<'a, K> {
-    inner: std::slice::Iter<'a, K>,
-}
-
-impl<'a, K: 'a> Iterator for WattIter<'a, K> {
-    type Item = &'a K;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-}
-
-impl<'a, K: 'a> CacheIterator<'a, K> for WattIter<'a, K> {}
 
 #[cfg(test)]
 mod tests {
@@ -220,11 +220,11 @@ mod tests {
         policy.on_add(2);
 
         for _ in 0..5 {
-            policy.on_access(&1, false);
+            policy.on_access(&1, crate::cache::CacheAccess::READ);
         }
 
         // Key 2 should be the eviction candidate (lowest frequency)
-        assert_eq!(policy.pick_eviction_candidate(), Some(&2));
+        assert_eq!(policy.pick_eviction_candidate(&mut |_| Some(1)), Some((&2, 1)));
     }
 
     #[test]
@@ -235,16 +235,16 @@ mod tests {
 
         // 3 Reads
         for _ in 0..3 {
-            policy.on_access(&1, false);
+            policy.on_access(&1, CacheAccess::READ);
         }
 
         // 1 Write
-        policy.on_access(&2, true);
+        policy.on_access(&2, CacheAccess::WRITE);
 
         // Key 1 should be evicted even though it has more total accesses, because the write weight
         // for Key 2 is much higher.
         // Depends on `DEFAULT_WRITE_WEIGHT` that this works
-        assert_eq!(policy.pick_eviction_candidate(), Some(&1));
+        assert_eq!(policy.pick_eviction_candidate(&mut |_| Some(1)), Some((&1, 1)));
     }
 
     #[test]
@@ -254,11 +254,16 @@ mod tests {
             policy.on_add(i);
         }
 
-        let first_candidate = *policy.pick_eviction_candidate().unwrap();
+        let first_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(first_candidate < DEFAULT_SAMPLE_SIZE);
 
-        let second_candidate = *policy.pick_eviction_candidate().unwrap();
-        assert!(second_candidate >= DEFAULT_SAMPLE_SIZE);
+        let second_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
+        assert!(
+            second_candidate >= DEFAULT_SAMPLE_SIZE,
+            "{} <= {} : FALSE",
+            second_candidate,
+            DEFAULT_SAMPLE_SIZE
+        );
         assert!(second_candidate < 2 * DEFAULT_SAMPLE_SIZE);
     }
 }

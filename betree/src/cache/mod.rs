@@ -43,10 +43,9 @@ pub trait Cache: Send + Sync {
     /// The cache entry type for the cache.
     type Value;
     /// The cache policy to be used
-    type Policy: CachePolicy<Self::Key>;
 
     /// Constructs a new instance with the given `capacity` in bytes.
-    fn new(capacity: usize, policy: Box<Self::Policy>) -> Self;
+    fn new(capacity: usize, policy: Box<dyn CachePolicy<Self::Key>>) -> Self;
 
     /// The value returned by `get`. Holds a reference to the actual cache
     /// entry.
@@ -58,7 +57,12 @@ pub trait Cache: Send + Sync {
     /// Returns a cache entry if present.
     /// The cache entry will be pinned while the return value is in scope.
     /// See `Self::ValueRef` for more information.
-    fn get(&self, key: &Self::Key, count_miss: bool) -> Option<Self::ValueRef>;
+    fn get(
+        &mut self,
+        key: &Self::Key,
+        count_miss: bool,
+        access: CacheAccess,
+    ) -> Option<Self::ValueRef>;
 
     /// Removes a cache entry if present and not pinned.
     /// `f` shall return the size of the cache entry in bytes.
@@ -101,9 +105,10 @@ pub trait Cache: Send + Sync {
     /// if the cache should not grow beyond the capacity bound.
     fn insert(&mut self, key: Self::Key, value: Self::Value, size: usize);
 
-    /// Returns an iterator that iterates over the cache entry keys in order
-    /// from old to new.
-    fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = &'a Self::Key> + 'a>;
+    /// Drop all entries of the cache that match the provided predicate.
+    fn drop_entries<F>(&mut self, removal_predicate: F)
+    where
+        F: FnMut(&Self::Key) -> bool;
 
     /// Returns the total size of all cache entries.
     fn size(&self) -> usize;
@@ -160,10 +165,14 @@ mod clock;
 mod clock_policy;
 mod hashmap_cache;
 mod lru_policy;
-mod watt_policy;
+mod random_policy;
 mod test;
-use crate::cache::cache_policy::CachePolicy;
+mod watt_policy;
 
+pub use self::cache_util::CacheAccess;
+pub use self::cache_policy::CachePolicy;
 pub use self::clock_policy::ClockCachePolicy;
+pub use self::random_policy::RandomCachePolicy;
+pub use self::lru_policy::LRUCachePolicy;
 pub use self::watt_policy::WattPolicy;
 pub use self::hashmap_cache::HashmapCache;

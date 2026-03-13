@@ -5,19 +5,20 @@ mod cache_tests {
     use crate::{
         cache::{
             cache_policy::CachePolicy, clock_policy::ClockCachePolicy, lru_policy::LRUCachePolicy,
-            Cache, HashmapCache, WattPolicy,
+            random_policy::RandomCachePolicy, Cache, HashmapCache, WattPolicy,
         },
         size::SizeMut,
     };
 
     /// Insertions of new values should always work, even if capacity is exceeded.
     #[rstest]
-    #[case(LRUCachePolicy::new())]
-    #[case(ClockCachePolicy::new())]
-    #[case(WattPolicy::new(100))]
-    fn test_insert_exceeding_cap<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(LRUCachePolicy::new()))]
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_insert_exceeding_cap(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         assert!(cache.size() == 0);
 
@@ -43,14 +44,16 @@ mod cache_tests {
     /// Insertions of existing values should panic
     #[rstest]
     #[should_panic]
-    #[case(LRUCachePolicy::new())]
+    #[case(Box::new(RandomCachePolicy::new()))]
     #[should_panic]
-    #[case(ClockCachePolicy::new())]
+    #[case(Box::new(LRUCachePolicy::new()))]
     #[should_panic]
-    #[case(WattPolicy::new(100))]
-    fn test_insert_duplicate<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[should_panic]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_insert_duplicate(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         assert!(cache.size() == 0);
 
@@ -64,12 +67,13 @@ mod cache_tests {
     }
 
     #[rstest]
-    #[case(LRUCachePolicy::new())]
-    #[case(ClockCachePolicy::new())]
-    #[case(WattPolicy::new(100))]
-    fn test_remove<P: CachePolicy<u64>>(#[case] policy: P) {
+    #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(LRUCachePolicy::new()))]
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_remove(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
         cache.insert(1, TestVal {}, 1);
         assert!(cache.size() == 1);
@@ -86,21 +90,46 @@ mod cache_tests {
     }
 
     #[rstest]
-    #[case(ClockCachePolicy::new(), 0)]
-    #[case(LRUCachePolicy::new(), 0)]
-    #[case(WattPolicy::new(100), 0)]
-    fn test_evict<P: CachePolicy<u64>>(#[case] policy: P, #[case] evicted_key: u64) {
+    #[case(Box::new(ClockCachePolicy::new()), 0)]
+    #[case(Box::new(LRUCachePolicy::new()), 0)]
+    #[case(Box::new(WattPolicy::new(100)), 0)]
+    fn test_evict(#[case] policy: Box<dyn CachePolicy<u64>>, #[case] evicted_key: u64) {
         let cap = 2;
-        let mut cache: HashmapCache<u64, TestVal, P> = HashmapCache::new(Box::new(policy), cap);
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
 
-        cache.insert(0, TestVal{}, 1);
-        cache.insert(1, TestVal{}, 1);
-        cache.insert(2, TestVal{}, 1);
+        cache.insert(0, TestVal {}, 1);
+        cache.insert(1, TestVal {}, 1);
+        cache.insert(2, TestVal {}, 1);
         let ret = cache.evict(|_, _, _| Some(1));
 
         assert!(ret.is_some());
         assert_eq!(ret.unwrap().0, evicted_key);
         assert!(!cache.contains_key(&evicted_key));
+    }
+
+    /// The cache policy should provide new eviction candidates if possible.
+    #[rstest]
+    #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(LRUCachePolicy::new()))]
+    #[case(Box::new(WattPolicy::new(100)))]
+    fn test_evict_skip(#[case] policy: Box<dyn CachePolicy<u64>>) {
+        let cap = 2;
+        let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
+
+        cache.insert(0, TestVal {}, 1);
+        cache.insert(1, TestVal {}, 1);
+        cache.insert(2, TestVal {}, 1);
+        let ret = cache.evict(|key, _, _| match key.clone() == 2 {
+            true => Some(1),
+            false => None,
+        });
+        assert!(ret.is_some());
+        assert_eq!(cache.size(), 2);
+
+        assert!(cache.contains_key(&0));
+        assert!(cache.contains_key(&1));
+        assert!(!cache.contains_key(&2));
     }
 
     struct TestVal {}

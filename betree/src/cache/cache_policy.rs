@@ -1,6 +1,6 @@
 //! This module provides the cache policy interface.
 
-use crate::cache::RemoveError;
+use crate::cache::{CacheAccess, RemoveError};
 
 /// Cache policy
 pub trait CachePolicy<K>: Sync + Send {
@@ -11,7 +11,7 @@ pub trait CachePolicy<K>: Sync + Send {
     fn max_evict_failures(&self) -> usize;
 
     /// Updates cache policy after object access.
-    fn on_access(&mut self, accessed_key: &K, is_write: bool);
+    fn on_access(&mut self, accessed_key: &K, access: CacheAccess);
 
     /// Updates cache policy after an object is added.
     fn on_add(&mut self, added_key: K);
@@ -24,12 +24,10 @@ pub trait CachePolicy<K>: Sync + Send {
 
     /// Returns the key of the least useful cache object (according
     /// to the cache policy), or `Option:None` if a selection is impossible.
-    fn pick_eviction_candidate(&self) -> Option<&K>;
-
-    /// Returns an iterator over the cache entries as layed out in the cache.
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
-    where
-        K: 'a;
+    /// Internally, the policy may perform updates to prevent the same candidate
+    /// from being chosen every time.
+    fn pick_eviction_candidate(
+        &mut self,
+        f: &mut dyn FnMut(&K) -> Option<usize>,
+    ) -> Option<(&K, usize)>;
 }
-
-pub trait CacheIterator<'a, K: 'a + Sized>: Iterator<Item = &'a K> + Sized {}

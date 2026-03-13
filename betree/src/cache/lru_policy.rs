@@ -3,13 +3,13 @@
 //! LRU is implemented on a doubly linked list.
 
 use std::{
-    collections::{linked_list::Iter, LinkedList},
+    collections::LinkedList,
     hash::Hash,
 };
 
 use crate::cache::{
-    cache_policy::{CacheIterator, CachePolicy},
-    RemoveError,
+    cache_policy::CachePolicy,
+    CacheAccess, RemoveError,
 };
 
 /// Implements an LRU Cache Policy ontop of a doubly linked list.
@@ -36,8 +36,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         return self.lru_list.len();
     }
 
-    fn on_access(&mut self, accessed_key: &K, is_write: bool) {
-        _ = is_write;
+    fn on_access(&mut self, accessed_key: &K, _access: CacheAccess) {
         match self.lru_list.extract_if(|k| k == accessed_key).nth(0) {
             Some(k) => self.lru_list.push_front(k),
             None => (),
@@ -60,30 +59,16 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for LRUCachePo
         self.lru_list.push_front(new_key);
     }
 
-    fn pick_eviction_candidate(&self) -> Option<&K> {
-        self.lru_list.back()
-    }
-
-    fn iter<'a>(&'a self) -> impl CacheIterator<'a, K>
-    where
-        K: 'a,
-    {
-        LRUIterator {
-            iter: self.lru_list.iter(),
+    fn pick_eviction_candidate(
+        &mut self,
+        f: &mut dyn FnMut(&K) -> Option<usize>,
+    ) -> Option<(&K, usize)> {
+        for key in self.lru_list.iter().rev() {
+            if let Some(size) = f(key) {
+                return Some((key, size));
+            }
         }
-    }
-}
 
-struct LRUIterator<'a, T> {
-    iter: Iter<'a, T>,
-}
-
-impl<'a, T> CacheIterator<'a, T> for LRUIterator<'a, T> {}
-
-impl<'a, T: 'a> Iterator for LRUIterator<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        None
     }
 }

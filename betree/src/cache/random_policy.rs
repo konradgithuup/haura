@@ -1,0 +1,74 @@
+//! This module provides an LRU cache implementation.
+//!
+//! LRU is implemented on a doubly linked list.
+
+use std::hash::Hash;
+
+use rand::random;
+
+use crate::cache::{cache_policy::CachePolicy, CacheAccess, RemoveError};
+
+/// Implements an LRU Cache Policy ontop of a doubly linked list.
+/// Keys are added at the front. On eviction, the tail is evicted.
+pub struct RandomCachePolicy<K> {
+    inner: Vec<K>,
+}
+
+impl<K: Hash + Eq> RandomCachePolicy<K> {
+    /// Returns new cache instance with the given `capacity`.
+    pub fn new() -> Self {
+        RandomCachePolicy {
+            inner: Default::default(),
+        }
+    }
+}
+
+impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCachePolicy<K> {
+    fn name(&self) -> &'static str {
+        "Random"
+    }
+
+    fn max_evict_failures(&self) -> usize {
+        return self.inner.len();
+    }
+
+    fn on_access(&mut self, _accessed_key: &K, _access: CacheAccess) {
+        // do nothing
+    }
+
+    fn on_add(&mut self, added_key: K) {
+        self.inner.push(added_key);
+    }
+
+    fn on_remove(&mut self, removed_key: &K) -> Option<RemoveError> {
+        match self.inner.iter().position(|k| k == removed_key) {
+            Some(idx) => {
+                self.inner.swap_remove(idx);
+                return None;
+            }
+            None => Some(RemoveError::NotPresent),
+        }
+    }
+
+    fn update(&mut self, old_key: &K, new_key: K) {
+        self.inner.retain(|key| key != old_key);
+        self.inner.push(new_key);
+    }
+
+    fn pick_eviction_candidate(
+        &mut self,
+        f: &mut dyn FnMut(&K) -> Option<usize>,
+    ) -> Option<(&K, usize)> {
+        let len = self.max_evict_failures();
+        let random_offset = random::<usize>() % len;
+
+        for i in 0..len {
+            let idx = (i + random_offset) % len;
+            if let Some(size) = f(&self.inner[idx]) {
+                return Some((&self.inner[idx], size));
+            }
+        }
+
+        None
+    }
+}

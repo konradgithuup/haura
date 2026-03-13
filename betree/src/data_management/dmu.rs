@@ -6,9 +6,9 @@ use super::{
     CopyOnWriteEvent, Dml, HasStoragePreference, Object, ObjectReference,
 };
 use crate::{
-    allocator::{Action, SegmentAllocator, SegmentId, SEGMENT_SIZE},
+    allocator::{Action, SegmentId},
     buffer::Buf,
-    cache::{Cache, ChangeKeyError, RemoveError},
+    cache::{Cache, CacheAccess, ChangeKeyError, RemoveError},
     checksum::{Builder, Checksum, State},
     compression::CompressionBuilder,
     data_management::{CopyOnWriteReason, IntegrityMode},
@@ -17,21 +17,17 @@ use crate::{
     size::{Size, SizeMut, StaticSize},
     storage_pool::{DiskOffset, StoragePoolLayer, NUM_STORAGE_CLASSES},
     tree::{Node, PivotKey},
-    vdev::{Block, File, BLOCK_SIZE},
+    vdev::{Block, BLOCK_SIZE},
     StoragePreference,
 };
-use byteorder::{LittleEndian, WriteBytesExt};
 use crossbeam_channel::Sender;
 use futures::{executor::block_on, future::ok, prelude::*};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
-    arch::x86_64::{__rdtscp, _rdtsc},
+    arch::x86_64::_rdtsc,
     collections::HashMap,
-    fs::OpenOptions,
-    io::{BufWriter, Write},
     mem::replace,
     ops::DerefMut,
-    path::PathBuf,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -207,7 +203,9 @@ where
                 return Ok(None);
             }
             self.modified_info.lock().insert(mid, info);
-            cache.get(&ObjectKey::Modified(mid), false).unwrap()
+            cache
+                .get(&ObjectKey::Modified(mid), false, CacheAccess::WRITE)
+                .unwrap()
         };
         let obj = CacheValueRef::write(entry);
 
@@ -333,7 +331,7 @@ where
         if !cache.contains_key(&key) {
             cache.insert(key, object, size);
         }
-        cache.get(&key, false).unwrap()
+        cache.get(&key, false, CacheAccess::WRITE).unwrap()
     }
 
     fn evict(&self, mut cache: RwLockWriteGuard<E>) -> Result<(), Error> {
@@ -398,7 +396,9 @@ where
 
         let size = object.value_mut().get_mut().cache_size();
         cache.insert(ObjectKey::InWriteback(mid), object, size);
-        let entry = cache.get(&ObjectKey::InWriteback(mid), false).unwrap();
+        let entry = cache
+            .get(&ObjectKey::InWriteback(mid), false, CacheAccess::WRITE)
+            .unwrap();
 
         let pk = entry.tag().clone();
         drop(cache);
@@ -773,7 +773,7 @@ where
             return match result {
                 Ok(()) => Ok(Some(
                     cache
-                        .get(&ObjectKey::InWriteback(mid), false)
+                        .get(&ObjectKey::InWriteback(mid), false, CacheAccess::WRITE)
                         .map(CacheValueRef::write)
                         .unwrap(),
                 )),
@@ -814,8 +814,8 @@ where
     fn try_get(&self, or: &Self::ObjectRef) -> Option<Self::CacheValueRef> {
         let result = {
             // Drop order important
-            let cache = self.cache.read();
-            cache.get(&or.as_key(), false)
+            let mut cache = self.cache.write();
+            cache.get(&or.as_key(), false, CacheAccess::READ)
         };
         result.map(CacheValueRef::read)
     }
@@ -823,8 +823,8 @@ where
     fn try_get_mut(&self, or: &Self::ObjectRef) -> Option<Self::CacheValueRefMut> {
         if let ObjRef::Modified(..) = *or {
             let result = {
-                let cache = self.cache.read();
-                cache.get(&or.as_key(), true)
+                let mut cache = self.cache.write();
+                cache.get(&or.as_key(), true, CacheAccess::WRITE)
             };
             result.map(CacheValueRef::write)
         } else {
@@ -833,9 +833,9 @@ where
     }
 
     fn get(&self, or: &mut Self::ObjectRef) -> Result<Self::CacheValueRef, Error> {
-        let mut cache = self.cache.read();
+        let mut cache = self.cache.write();
         loop {
-            if let Some(entry) = cache.get(&or.as_key(), true) {
+            if let Some(entry) = cache.get(&or.as_key(), true, CacheAccess::READ) {
                 drop(cache);
                 return Ok(CacheValueRef::read(entry));
             }
@@ -855,7 +855,7 @@ where
                         obj.set_system_storage_preference(pref)
                     }
                 }
-                cache = self.cache.read();
+                cache = self.cache.write();
             } else {
                 self.fix_or(or);
             }
@@ -918,7 +918,7 @@ where
                 TaggedCacheValue::new(RwLock::new(object), pk.clone()),
                 size,
             );
-            cache.get(&key, false).unwrap()
+            cache.get(&key, false, CacheAccess::WRITE).unwrap()
         };
         (CacheValueRef::write(entry), ObjRef::Modified(mid, pk))
     }
@@ -1095,14 +1095,7 @@ where
 
     fn drop_cache(&self) {
         let mut cache = self.cache.write();
-        let keys: Vec<_> = cache
-            .iter()
-            .cloned()
-            .filter(|&key| matches!(key, ObjectKey::Unmodified { .. }))
-            .collect();
-        for key in keys {
-            let _ = cache.remove(&key, |obj| obj.cache_size());
-        }
+        cache.drop_entries(|k| matches!(k, ObjectKey::Unmodified { .. }));
     }
 }
 
