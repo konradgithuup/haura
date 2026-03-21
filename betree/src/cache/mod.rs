@@ -166,6 +166,8 @@ mod random_policy;
 mod test;
 mod watt_policy;
 
+pub(crate) mod linked_list;
+
 pub use self::cache_policy::CachePolicy;
 pub use self::cache_util::CacheAccess;
 pub use self::clock_policy::ClockCachePolicy;
