@@ -34,7 +34,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
         self.ref_map.len() * 2
     }
 
-    fn on_access(&mut self, accessed_key: &K, _access: CacheAccess) {
+    fn on_access(&self, accessed_key: &K, _access: CacheAccess) {
         if let Some(is_ref) = self.ref_map.get(accessed_key) {
             is_ref.store(true, Ordering::Relaxed);
         }
@@ -61,7 +61,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
     fn pick_eviction_candidate(
         &mut self,
         f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)> {
+    ) -> Option<(K, usize)> {
         for _ in 0..self.max_evict_failures() {
             let key = self.clock.peek_front().cloned()?;
 
@@ -71,7 +71,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for ClockCache
             if was_referenced {
                 // pass
             } else if let Some(size) = f(&key) {
-                return Some((self.clock.peek_front()?, size));
+                return Some((key, size));
             }
 
             self.clock.next();

@@ -32,7 +32,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCach
         return self.inner.len();
     }
 
-    fn on_access(&mut self, _accessed_key: &K, _access: CacheAccess) {
+    fn on_access(&self, _accessed_key: &K, _access: CacheAccess) {
         // do nothing
     }
 
@@ -58,14 +58,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for RandomCach
     fn pick_eviction_candidate(
         &mut self,
         f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)> {
+    ) -> Option<(K, usize)> {
         let len = self.max_evict_failures();
         let random_offset = random::<usize>() % len;
 
         for i in 0..len {
             let idx = (i + random_offset) % len;
             if let Some(size) = f(&self.inner[idx]) {
-                return Some((&self.inner[idx], size));
+                return Some((self.inner[idx].clone(), size));
             }
         }
 

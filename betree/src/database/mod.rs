@@ -2,7 +2,8 @@
 use crate::{
     atomic_option::AtomicOption,
     cache::{
-        CachePolicy, ClockCachePolicy, HashmapCache, LRUCachePolicy, RandomCachePolicy, WattPolicy,
+        CachePolicy, ClockCachePolicy, HashmapCache, LFUCachePolicy, LRUCachePolicy,
+        RandomCachePolicy, WattPolicy,
     },
     checksum::GxHash,
     compression::CompressionConfiguration,
@@ -124,6 +125,8 @@ pub enum Policy {
     Random,
     /// Clock
     Clock,
+    /// Least Frequently Used
+    LFU,
     /// Least Recently Used
     LRU,
     /// Write Aware Timestamp Tracking
@@ -249,6 +252,7 @@ impl DatabaseConfiguration {
     fn init_policy(&self) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
         match self.cache_policy {
             Policy::Clock => Box::new(ClockCachePolicy::new()),
+            Policy::LFU => Box::new(crate::cache::LFUCachePolicy::new()),
             Policy::LRU => Box::new(LRUCachePolicy::new()),
             Policy::WATT => Box::new(WattPolicy::new(100)),
             Policy::Random => Box::new(RandomCachePolicy::new()),

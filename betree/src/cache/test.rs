@@ -4,8 +4,9 @@ mod cache_tests {
 
     use crate::{
         cache::{
-            cache_policy::CachePolicy, clock_policy::ClockCachePolicy, lru_policy::LRUCachePolicy,
-            random_policy::RandomCachePolicy, Cache, HashmapCache, WattPolicy,
+            cache_policy::CachePolicy, clock_policy::ClockCachePolicy, lfu_policy::LFUCachePolicy,
+            lru_policy::LRUCachePolicy, random_policy::RandomCachePolicy, Cache, HashmapCache,
+            WattPolicy,
         },
         size::SizeMut,
     };
@@ -13,6 +14,7 @@ mod cache_tests {
     /// Insertions of new values should always work, even if capacity is exceeded.
     #[rstest]
     #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(LFUCachePolicy::new()))]
     #[case(Box::new(LRUCachePolicy::new()))]
     #[case(Box::new(ClockCachePolicy::new()))]
     #[case(Box::new(WattPolicy::new(100)))]
@@ -46,6 +48,8 @@ mod cache_tests {
     #[should_panic]
     #[case(Box::new(RandomCachePolicy::new()))]
     #[should_panic]
+    #[case(Box::new(LFUCachePolicy::new()))]
+    #[should_panic]
     #[case(Box::new(LRUCachePolicy::new()))]
     #[should_panic]
     #[case(Box::new(ClockCachePolicy::new()))]
@@ -68,6 +72,7 @@ mod cache_tests {
 
     #[rstest]
     #[case(Box::new(RandomCachePolicy::new()))]
+    #[case(Box::new(LFUCachePolicy::new()))]
     #[case(Box::new(LRUCachePolicy::new()))]
     #[case(Box::new(ClockCachePolicy::new()))]
     #[case(Box::new(WattPolicy::new(100)))]
@@ -91,6 +96,7 @@ mod cache_tests {
 
     #[rstest]
     #[case(Box::new(ClockCachePolicy::new()), 0)]
+    #[case(Box::new(LFUCachePolicy::new()), 2)]
     #[case(Box::new(LRUCachePolicy::new()), 0)]
     #[case(Box::new(WattPolicy::new(100)), 0)]
     fn test_evict(#[case] policy: Box<dyn CachePolicy<u64>>, #[case] evicted_key: u64) {
@@ -111,6 +117,7 @@ mod cache_tests {
     #[rstest]
     #[case(Box::new(RandomCachePolicy::new()))]
     #[case(Box::new(ClockCachePolicy::new()))]
+    #[case(Box::new(LFUCachePolicy::new()))]
     #[case(Box::new(LRUCachePolicy::new()))]
     #[case(Box::new(WattPolicy::new(100)))]
     fn test_evict_skip(#[case] policy: Box<dyn CachePolicy<u64>>) {

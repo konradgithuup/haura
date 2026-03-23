@@ -82,7 +82,7 @@ where
         self.map.contains_key(key)
     }
 
-    fn get(&mut self, key: &K, count_miss: bool, access: CacheAccess) -> Option<Self::ValueRef> {
+    fn get(&self, key: &K, count_miss: bool, access: CacheAccess) -> Option<Self::ValueRef> {
         if let Some(value) = self.map.get(key).cloned() {
             self.hits.fetch_add(1, Ordering::Relaxed);
 
@@ -203,14 +203,12 @@ where
                 None => None,
             }
         }) {
-            Some(k) => k.clone(),
+            Some(res) => res,
             None => {
                 warn!("{} eviction failed!", self.policy.name());
                 return None;
             }
         };
-
-        let key = key.clone();
 
         // remove chosen entry
         let _ = self.policy.on_remove(&key);

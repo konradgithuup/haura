@@ -3,7 +3,7 @@ use crate::cache::cache_policy::CachePolicy;
 use crate::cache::{CacheAccess, RemoveError};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 const ACCESS_HISTORY_SIZE: usize = 8;
 const WRITE_HISTORY_SIZE: usize = 4;
@@ -12,25 +12,42 @@ const DEFAULT_WRITE_WEIGHT: f32 = 4.0;
 const RECENCY_DAMPENING: f32 = 0.1;
 const EPOCH_DIVISOR: usize = 10;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct WattHistory {
-    access_log: [u32; ACCESS_HISTORY_SIZE],
-    write_log: [u32; WRITE_HISTORY_SIZE],
-    ac_head: u8,
-    wr_head: u8,
-    ac_count: u8,
-    wr_count: u8,
+    access_log: [AtomicU32; ACCESS_HISTORY_SIZE],
+    write_log: [AtomicU32; WRITE_HISTORY_SIZE],
+    ac_head: AtomicU8,
+    wr_head: AtomicU8,
+    ac_count: AtomicU8,
+    wr_count: AtomicU8,
+}
+
+impl Clone for WattHistory {
+    fn clone(&self) -> Self {
+        Self {
+            access_log: std::array::from_fn(|i| {
+                AtomicU32::new(self.access_log[i].load(Ordering::Relaxed))
+            }),
+            write_log: std::array::from_fn(|i| {
+                AtomicU32::new(self.write_log[i].load(Ordering::Relaxed))
+            }),
+            ac_head: AtomicU8::new(self.ac_head.load(Ordering::Relaxed)),
+            wr_head: AtomicU8::new(self.wr_head.load(Ordering::Relaxed)),
+            ac_count: AtomicU8::new(self.ac_count.load(Ordering::Relaxed)),
+            wr_count: AtomicU8::new(self.wr_count.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl Default for WattHistory {
     fn default() -> Self {
         Self {
-            access_log: [0; ACCESS_HISTORY_SIZE],
-            write_log: [0; WRITE_HISTORY_SIZE],
-            ac_head: (ACCESS_HISTORY_SIZE - 1) as u8,
-            wr_head: (WRITE_HISTORY_SIZE - 1) as u8,
-            ac_count: 0,
-            wr_count: 0,
+            access_log: std::array::from_fn(|_| AtomicU32::new(0)),
+            write_log: std::array::from_fn(|_| AtomicU32::new(0)),
+            ac_head: AtomicU8::new((ACCESS_HISTORY_SIZE - 1) as u8),
+            wr_head: AtomicU8::new((WRITE_HISTORY_SIZE - 1) as u8),
+            ac_count: AtomicU8::new(0),
+            wr_count: AtomicU8::new(0),
         }
     }
 }
@@ -64,9 +81,12 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
 
     fn calculate_pv(&self, hist: &WattHistory) -> f32 {
         let mut max_ac_sf = 0.0;
-        for i in 1..=(hist.ac_count as usize) {
+        let ac_count = hist.ac_count.load(Ordering::Relaxed) as usize;
+        let ac_head = hist.ac_head.load(Ordering::Relaxed) as usize;
+        for i in 1..=ac_count {
             let ts = hist.access_log
-                [(hist.ac_head as usize + ACCESS_HISTORY_SIZE - (i - 1)) % ACCESS_HISTORY_SIZE];
+                [(ac_head + ACCESS_HISTORY_SIZE - (i - 1)) % ACCESS_HISTORY_SIZE]
+                .load(Ordering::Relaxed);
             let age = (self.t_now.saturating_sub(ts)).max(1);
             let mut sf = (i as f32) / (age as f32);
             if i == 1 {
@@ -78,9 +98,11 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
         }
 
         let mut max_wr_sf = 0.0;
-        for i in 1..=(hist.wr_count as usize) {
-            let ts = hist.write_log
-                [(hist.wr_head as usize + WRITE_HISTORY_SIZE - (i - 1)) % WRITE_HISTORY_SIZE];
+        let wr_count = hist.wr_count.load(Ordering::Relaxed) as usize;
+        let wr_head = hist.wr_head.load(Ordering::Relaxed) as usize;
+        for i in 1..=wr_count {
+            let ts = hist.write_log[(wr_head + WRITE_HISTORY_SIZE - (i - 1)) % WRITE_HISTORY_SIZE]
+                .load(Ordering::Relaxed);
             let age = (self.t_now.saturating_sub(ts)).max(1);
             let sf = (i as f32) / (age as f32);
             if sf > max_wr_sf {
@@ -129,24 +151,42 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
         self.keys.len()
     }
 
-    fn on_access(&mut self, accessed_key: &K, access: CacheAccess) {
-        if let Some(hist) = self.history.get_mut(accessed_key) {
+    fn on_access(&self, accessed_key: &K, access: CacheAccess) {
+        if let Some(hist) = self.history.get(accessed_key) {
+            let now = self.t_now;
             if access == CacheAccess::WRITE {
-                hist.wr_head = (hist.wr_head + 1) % WRITE_HISTORY_SIZE as u8;
-                hist.write_log[hist.wr_head as usize] = self.t_now;
-                hist.wr_count = (hist.wr_count + 1).min(WRITE_HISTORY_SIZE as u8);
+                let old_pos = hist.wr_head.load(Ordering::Relaxed);
+                if now != hist.write_log[old_pos as usize].load(Ordering::Relaxed) {
+                    let pos = (old_pos + 1) % (WRITE_HISTORY_SIZE as u8);
+                    hist.write_log[pos as usize].store(now, Ordering::Release);
+                    hist.wr_head.store(pos, Ordering::Release);
+
+                    let count = hist.wr_count.load(Ordering::Relaxed);
+                    if count < WRITE_HISTORY_SIZE as u8 {
+                        hist.wr_count.store(count + 1, Ordering::Relaxed);
+                    }
+                }
             }
-            hist.ac_head = (hist.ac_head + 1) % ACCESS_HISTORY_SIZE as u8;
-            hist.access_log[hist.ac_head as usize] = self.t_now;
-            hist.ac_count = (hist.ac_count + 1).min(ACCESS_HISTORY_SIZE as u8);
+
+            let old_pos = hist.ac_head.load(Ordering::Relaxed);
+            if now != hist.access_log[old_pos as usize].load(Ordering::Relaxed) {
+                let pos = (old_pos + 1) % (ACCESS_HISTORY_SIZE as u8);
+                hist.access_log[pos as usize].store(now, Ordering::Release);
+                hist.ac_head.store(pos, Ordering::Release);
+
+                let count = hist.ac_count.load(Ordering::Relaxed);
+                if count < ACCESS_HISTORY_SIZE as u8 {
+                    hist.ac_count.store(count + 1, Ordering::Relaxed);
+                }
+            }
         }
     }
 
     fn on_add(&mut self, added_key: K) {
-        let mut hist = WattHistory::default();
-        hist.ac_head = 0;
-        hist.access_log[0] = self.t_now;
-        hist.ac_count = 1;
+        let hist = WattHistory::default();
+        hist.ac_head.store(0, Ordering::Relaxed);
+        hist.access_log[0].store(self.t_now, Ordering::Relaxed);
+        hist.ac_count.store(1, Ordering::Relaxed);
         self.history.insert(added_key.clone(), hist);
         self.keys.push(added_key);
     }
@@ -188,7 +228,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
     fn pick_eviction_candidate(
         &mut self,
         mut f: &mut dyn FnMut(&K) -> Option<usize>,
-    ) -> Option<(&K, usize)> {
+    ) -> Option<(K, usize)> {
         let len = self.keys.len();
         if len == 0 {
             return None;
@@ -201,7 +241,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
             let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
 
             if let Some((idx, size)) = self.pick(start_idx, &mut f) {
-                return Some((&self.keys[idx], size));
+                return Some((self.keys[idx].clone(), size));
             }
         }
 
@@ -219,12 +259,21 @@ mod tests {
         policy.on_add(1);
         policy.on_add(2);
 
-        for _ in 0..5 {
+        for i in 0..5 {
             policy.on_access(&1, crate::cache::CacheAccess::READ);
+            // Trigger epoch increments by simulating removals
+            for j in 0..10 {
+                let dummy = 1000 + i * 100 + j;
+                policy.on_add(dummy);
+                policy.on_remove(&dummy);
+            }
         }
 
         // Key 2 should be the eviction candidate (lowest frequency)
-        assert_eq!(policy.pick_eviction_candidate(&mut |_| Some(1)), Some((&2, 1)));
+        assert_eq!(
+            policy.pick_eviction_candidate(&mut |_| Some(1)),
+            Some((2, 1))
+        );
     }
 
     #[test]
@@ -244,7 +293,10 @@ mod tests {
         // Key 1 should be evicted even though it has more total accesses, because the write weight
         // for Key 2 is much higher.
         // Depends on `DEFAULT_WRITE_WEIGHT` that this works
-        assert_eq!(policy.pick_eviction_candidate(&mut |_| Some(1)), Some((&1, 1)));
+        assert_eq!(
+            policy.pick_eviction_candidate(&mut |_| Some(1)),
+            Some((1, 1))
+        );
     }
 
     #[test]
@@ -254,10 +306,10 @@ mod tests {
             policy.on_add(i);
         }
 
-        let first_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
+        let first_candidate = policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(first_candidate < DEFAULT_SAMPLE_SIZE);
 
-        let second_candidate = *policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
+        let second_candidate = policy.pick_eviction_candidate(&mut |_| Some(1)).unwrap().0;
         assert!(
             second_candidate >= DEFAULT_SAMPLE_SIZE,
             "{} <= {} : FALSE",
