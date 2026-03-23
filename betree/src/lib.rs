@@ -33,6 +33,7 @@ pub mod vdev;
 
 pub mod metrics;
 pub mod object;
+pub mod optimizer;
 
 pub mod migration;
 

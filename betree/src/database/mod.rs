@@ -170,6 +170,9 @@ pub struct DatabaseConfiguration {
     /// Set the migration policy to be used.
     pub migration_policy: Option<MigrationPolicies>,
 
+    /// Configuration for the simulated annealing optimizer
+    pub optimizer: Option<crate::optimizer::config::OptimizerConfig>,
+
     /// If and how to log database metrics
     pub metrics: Option<MetricsConfiguration>,
 
@@ -191,6 +194,7 @@ impl Default for DatabaseConfiguration {
             cache_policy: Policy::Clock,
             metrics: None,
             migration_policy: None,
+            optimizer: None,
             allocation_log_file_path: PathBuf::from("allocation_log.bin"),
         }
     }
@@ -486,7 +490,17 @@ impl Database {
         #[cfg(feature = "allocation_log")]
         dmu.write_global_header()?;
 
-        let (tree, root_ptr) = builder.select_root_tree(Arc::new(dmu))?;
+        let dmu = Arc::new(dmu);
+        let shared_weights = crate::optimizer::SharedWeights::new();
+        if let Some(opt_cfg) = builder.optimizer {
+            let dmu_clone = Arc::clone(&dmu);
+            let weights_clone = crate::optimizer::SharedWeights(Arc::clone(&shared_weights.0));
+            thread::spawn(move || {
+                crate::optimizer::run_optimizer(dmu_clone, weights_clone, opt_cfg);
+            });
+        }
+
+        let (tree, root_ptr) = builder.select_root_tree(dmu)?;
 
         *tree.dmu().handler().current_generation.lock_write() = root_ptr.generation().next();
         *tree.dmu().handler().root_tree_snapshot.write() = Some(TreeInner::new_ro(
