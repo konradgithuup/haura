@@ -4,9 +4,9 @@ mod cache_tests {
 
     use crate::{
         cache::{
-            cache_policy::CachePolicy, clock_policy::ClockCachePolicy, lfu_policy::LFUCachePolicy,
-            lru_policy::LRUCachePolicy, random_policy::RandomCachePolicy, Cache, HashmapCache,
-            WattPolicy,
+            arc_policy::ArcCachePolicy, cache_policy::CachePolicy, clock_policy::ClockCachePolicy,
+            lfu_policy::LFUCachePolicy, lru_policy::LRUCachePolicy,
+            random_policy::RandomCachePolicy, watt_policy::WattPolicy, Cache, HashmapCache,
         },
         size::SizeMut,
     };
@@ -18,6 +18,7 @@ mod cache_tests {
     #[case(Box::new(LRUCachePolicy::new()))]
     #[case(Box::new(ClockCachePolicy::new()))]
     #[case(Box::new(WattPolicy::new(100)))]
+    #[case(Box::new(ArcCachePolicy::new(2)))]
     fn test_insert_exceeding_cap(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
@@ -55,6 +56,8 @@ mod cache_tests {
     #[case(Box::new(ClockCachePolicy::new()))]
     #[should_panic]
     #[case(Box::new(WattPolicy::new(100)))]
+    #[should_panic]
+    #[case(Box::new(ArcCachePolicy::new(2)))]
     fn test_insert_duplicate(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
@@ -76,6 +79,7 @@ mod cache_tests {
     #[case(Box::new(LRUCachePolicy::new()))]
     #[case(Box::new(ClockCachePolicy::new()))]
     #[case(Box::new(WattPolicy::new(100)))]
+    #[case(Box::new(ArcCachePolicy::new(2)))]
     fn test_remove(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
@@ -99,6 +103,7 @@ mod cache_tests {
     #[case(Box::new(LFUCachePolicy::new()), 2)]
     #[case(Box::new(LRUCachePolicy::new()), 0)]
     #[case(Box::new(WattPolicy::new(100)), 0)]
+    #[case(Box::new(ArcCachePolicy::new(2)), 0)]
     fn test_evict(#[case] policy: Box<dyn CachePolicy<u64>>, #[case] evicted_key: u64) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);
@@ -120,6 +125,7 @@ mod cache_tests {
     #[case(Box::new(LFUCachePolicy::new()))]
     #[case(Box::new(LRUCachePolicy::new()))]
     #[case(Box::new(WattPolicy::new(100)))]
+    #[case(Box::new(ArcCachePolicy::new(2)))]
     fn test_evict_skip(#[case] policy: Box<dyn CachePolicy<u64>>) {
         let cap = 2;
         let mut cache: HashmapCache<u64, TestVal> = HashmapCache::new(policy, cap);

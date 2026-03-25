@@ -155,6 +155,7 @@ pub trait Stats: Display + Debug + serde::Serialize {
     fn removals(&self) -> u64;
 }
 
+mod arc_policy;
 mod cache_policy;
 mod cache_util;
 mod clock;
@@ -168,6 +169,7 @@ mod watt_policy;
 
 pub(crate) mod linked_list;
 
+pub use self::arc_policy::ArcCachePolicy;
 pub use self::cache_policy::CachePolicy;
 pub use self::cache_util::CacheAccess;
 pub use self::clock_policy::ClockCachePolicy;
