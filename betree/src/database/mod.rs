@@ -121,6 +121,8 @@ pub enum SyncMode {
 /// Determines the cache policy used by the DMU's cache
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Policy {
+    /// Adaptive Replacement Cache
+    ARC,
     /// Random cache policy
     Random,
     /// Clock
@@ -254,11 +256,27 @@ impl DatabaseConfiguration {
     }
 
     fn init_policy(&self) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
+        let storage_kind = self
+            .storage
+            .tiers
+            .get(self.default_storage_class as usize)
+            .map(|tier| tier.storage_kind)
+            .unwrap_or(crate::tree::StorageKind::Memory);
+
+        // HACK: copied from `min_size` in `tree/imp/node.rs`
+        let min_node_size = match storage_kind {
+            crate::tree::StorageKind::Hdd => 1024 * 1024,
+            crate::tree::StorageKind::Ssd => 512 * 1024,
+            crate::tree::StorageKind::Memory => 128 * 1024,
+        };
+
+        let item_capacity = std::cmp::max(1, self.cache_size / min_node_size);
         match self.cache_policy {
+            Policy::ARC => Box::new(crate::cache::ArcCachePolicy::new(item_capacity)),
             Policy::Clock => Box::new(ClockCachePolicy::new()),
             Policy::LFU => Box::new(crate::cache::LFUCachePolicy::new()),
             Policy::LRU => Box::new(LRUCachePolicy::new()),
-            Policy::WATT => Box::new(WattPolicy::new(100)),
+            Policy::WATT => Box::new(WattPolicy::new(item_capacity)),
             Policy::Random => Box::new(RandomCachePolicy::new()),
         }
     }
