@@ -13,50 +13,49 @@ pub const SEGMENT_SIZE_BYTES: usize = SEGMENT_SIZE / 8;
 const SEGMENT_SIZE_LOG_2: usize = 18;
 const SEGMENT_SIZE_MASK: usize = SEGMENT_SIZE - 1;
 
-/// Simple first-fit bitmap allocator
+/// Simple first-fit bitmap allocator that uses a list to manage free segments
 pub struct SegmentAllocator {
     data: BitArr!(for SEGMENT_SIZE, in u8, Lsb0),
+    free_segments: Vec<(u32, u32)>, // (offset, size) of free segments
 }
 
 impl SegmentAllocator {
     /// Constructs a new `SegmentAllocator` given the segment allocation bitmap.
     /// The `bitmap` must have a length of `SEGMENT_SIZE`.
     pub fn new(bitmap: [u8; SEGMENT_SIZE_BYTES]) -> Self {
-        SegmentAllocator {
-            data: BitArray::new(bitmap),
-        }
+        let data = BitArray::new(bitmap);
+        let mut allocator = SegmentAllocator {
+            data,
+            free_segments: Vec::new(),
+        };
+        allocator.initialize_free_segments();
+        allocator
     }
 
     /// Allocates a block of the given `size`.
-    /// Returns `None` if the allocation request cannot be satisfied.
+    /// Returns `None` if the allocation request cannot be satisfied and the offset if if can.
     pub fn allocate(&mut self, size: u32) -> Option<u32> {
         if size == 0 {
             return Some(0);
         }
-        let offset = {
-            let mut idx = 0;
-            loop {
-                loop {
-                    if idx + size > SEGMENT_SIZE as u32 {
-                        return None;
-                    }
-                    if !self.data[idx as usize] {
-                        break;
-                    }
-                    idx += 1;
-                }
 
-                let start_idx = (idx + 1) as usize;
-                let end_idx = (idx + size) as usize;
-                if let Some(first_alloc_idx) = self.data[start_idx..end_idx].first_one() {
-                    idx = (idx + 1) + first_alloc_idx as u32 + 1;
-                } else {
-                    break idx;
-                }
+        for i in 0..self.free_segments.len() {
+            let (offset, segment_size) = self.free_segments[i];
+
+            if segment_size >= size {
+                self.mark(offset, size, Action::Allocate);
+
+                // update the free segment with the remaining size and new offset
+                self.free_segments[i].0 = offset + size;
+                self.free_segments[i].1 = segment_size - size;
+                // NOTE: We do not handle the == case here. We could remove that entry from the
+                // list but we then would need to copy some things because the allocate_at (and
+                // deallocation) logic depends on a sorted list and also need have extra handling.
+                // The empty slots get garbage collected on the next sync anyway.
+                return Some(offset);
             }
-        };
-        self.mark(offset, size, Action::Allocate);
-        return Some(offset);
+        }
+        None
     }
 
     /// Allocates a block of the given `size` at `offset`.
@@ -74,18 +73,43 @@ impl SegmentAllocator {
         if self.data[start_idx..end_idx].any() {
             return false;
         }
-        self.mark(offset, size, Action::Allocate);
-        true
-    }
 
-    /// Deallocates the allocated block.
-    pub fn deallocate(&mut self, offset: u32, size: u32) {
-        log::debug!(
-            "Marked a block range {{ offset: {}, size: {} }} for deallocation",
-            offset,
-            size
-        );
-        self.mark(offset, size, Action::Deallocate);
+        // Update free_segments to reflect the allocation
+        for i in 0..self.free_segments.len() {
+            let (seg_offset, seg_size) = self.free_segments[i];
+            if seg_offset == offset && seg_size == size {
+                // perfect fit, remove the segment
+                self.free_segments.remove(i);
+                self.mark(offset, size, Action::Allocate);
+                return true;
+            } else if seg_offset == offset && seg_size > size {
+                // allocation at the beginning of the segment, adjust offset and size
+                self.free_segments[i].0 += size;
+                self.free_segments[i].1 -= size;
+                self.mark(offset, size, Action::Allocate);
+                return true;
+            } else if offset > seg_offset && offset + size == seg_offset + seg_size {
+                // allocation at the end of the segment, just adjust size
+                self.free_segments[i].1 -= size;
+                self.mark(offset, size, Action::Allocate);
+                return true;
+            } else if offset > seg_offset
+                && offset < seg_offset + seg_size
+                && offset + size < seg_offset + seg_size
+            {
+                // allocation in the middle of the segment, split segment
+                let remaining_size = seg_size - (size + (offset - seg_offset));
+                let new_offset = offset + size;
+                self.free_segments[i].1 = offset - seg_offset; // adjust current segment size
+
+                self.free_segments
+                    .insert(i + 1, (new_offset, remaining_size)); // insert new segment after current
+                self.mark(offset, size, Action::Allocate);
+                return true;
+            }
+        }
+
+        false // No suitable free segment found in free_segments list
     }
 
     fn mark(&mut self, offset: u32, size: u32, action: Action) {
@@ -101,6 +125,25 @@ impl SegmentAllocator {
         }
 
         range.fill(action.as_bool());
+    }
+
+    /// Initializes the `free_segments` vector by scanning the bitmap.
+    fn initialize_free_segments(&mut self) {
+        let mut offset: u32 = 0;
+        while offset < SEGMENT_SIZE as u32 {
+            if !self.data[offset as usize] {
+                // If bit is 0, it's free
+                let start_offset = offset;
+                let mut current_size = 0;
+                while offset < SEGMENT_SIZE as u32 && !self.data[offset as usize] {
+                    current_size += 1;
+                    offset += 1;
+                }
+                self.free_segments.push((start_offset, current_size));
+            } else {
+                offset += 1;
+            }
+        }
     }
 }
 
