@@ -166,6 +166,7 @@ mod lru_policy;
 mod random_policy;
 mod test;
 mod watt_policy;
+mod whatt_policy;
 
 pub(crate) mod linked_list;
 
@@ -178,3 +179,4 @@ pub use self::lfu_policy::LFUCachePolicy;
 pub use self::lru_policy::LRUCachePolicy;
 pub use self::random_policy::RandomCachePolicy;
 pub use self::watt_policy::WattPolicy;
+pub use self::whatt_policy::WhattPolicy;

@@ -1,0 +1,353 @@
+//! This module provides the Write and Hardware-Aware Timestamp Tracking (WHATT) cache policy.
+use crate::cache::cache_policy::CachePolicy;
+use crate::cache::{CacheAccess, RemoveError};
+use crate::optimizer::SharedWeights;
+use crate::storage_pool::GlobalDiskId;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+
+const ACCESS_HISTORY_SIZE: usize = 8;
+const WRITE_HISTORY_SIZE: usize = 4;
+const DEFAULT_SAMPLE_SIZE: usize = 8;
+const DEFAULT_WRITE_WEIGHT: f32 = 4.0;
+const RECENCY_DAMPENING: f32 = 0.1;
+const EPOCH_DIVISOR: usize = 10;
+
+#[derive(Debug)]
+struct WhattHistory {
+    access_log: [AtomicU32; ACCESS_HISTORY_SIZE],
+    write_log: [AtomicU32; WRITE_HISTORY_SIZE],
+    ac_head: AtomicU8,
+    wr_head: AtomicU8,
+    ac_count: AtomicU8,
+    wr_count: AtomicU8,
+}
+
+impl Clone for WhattHistory {
+    fn clone(&self) -> Self {
+        Self {
+            access_log: std::array::from_fn(|i| {
+                AtomicU32::new(self.access_log[i].load(Ordering::Relaxed))
+            }),
+            write_log: std::array::from_fn(|i| {
+                AtomicU32::new(self.write_log[i].load(Ordering::Relaxed))
+            }),
+            ac_head: AtomicU8::new(self.ac_head.load(Ordering::Relaxed)),
+            wr_head: AtomicU8::new(self.wr_head.load(Ordering::Relaxed)),
+            ac_count: AtomicU8::new(self.ac_count.load(Ordering::Relaxed)),
+            wr_count: AtomicU8::new(self.wr_count.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl Default for WhattHistory {
+    fn default() -> Self {
+        Self {
+            access_log: std::array::from_fn(|_| AtomicU32::new(0)),
+            write_log: std::array::from_fn(|_| AtomicU32::new(0)),
+            ac_head: AtomicU8::new((ACCESS_HISTORY_SIZE - 1) as u8),
+            wr_head: AtomicU8::new((WRITE_HISTORY_SIZE - 1) as u8),
+            ac_count: AtomicU8::new(0),
+            wr_count: AtomicU8::new(0),
+        }
+    }
+}
+
+/// WHATT cache policy implementation.
+pub struct WhattPolicy<K> {
+    history: HashMap<K, WhattHistory>,
+    keys: Vec<K>,
+    cursor: AtomicUsize,
+    t_now: u32,
+    eviction_count: u32,
+    epoch_threshold: u32,
+    sample_size: usize,
+    write_weight: f32,
+    shared_weights: SharedWeights,
+    disk_id_extractor: fn(&K) -> Option<GlobalDiskId>,
+}
+
+impl<K: Eq + Hash + Clone> WhattPolicy<K> {
+    /// Init WHATT cache policy
+    pub fn new(
+        cache_capacity_blocks: usize,
+        shared_weights: SharedWeights,
+        disk_id_extractor: fn(&K) -> Option<GlobalDiskId>,
+    ) -> Self {
+        Self {
+            history: HashMap::new(),
+            keys: Vec::new(),
+            cursor: AtomicUsize::new(0),
+            t_now: 1,
+            eviction_count: 0,
+            epoch_threshold: (cache_capacity_blocks / EPOCH_DIVISOR).max(1) as u32,
+            sample_size: DEFAULT_SAMPLE_SIZE,
+            write_weight: DEFAULT_WRITE_WEIGHT,
+            shared_weights,
+            disk_id_extractor,
+        }
+    }
+
+    fn calculate_pv(&self, hist: &WhattHistory) -> f32 {
+        let mut max_ac_sf = 0.0;
+        let ac_count = hist.ac_count.load(Ordering::Relaxed) as usize;
+        let ac_head = hist.ac_head.load(Ordering::Relaxed) as usize;
+        for i in 1..=ac_count {
+            let ts = hist.access_log
+                [(ac_head + ACCESS_HISTORY_SIZE - (i - 1)) % ACCESS_HISTORY_SIZE]
+                .load(Ordering::Relaxed);
+            let age = (self.t_now.saturating_sub(ts)).max(1);
+            let mut sf = (i as f32) / (age as f32);
+            if i == 1 {
+                sf *= RECENCY_DAMPENING;
+            }
+            if sf > max_ac_sf {
+                max_ac_sf = sf;
+            }
+        }
+
+        let mut max_wr_sf = 0.0;
+        let wr_count = hist.wr_count.load(Ordering::Relaxed) as usize;
+        let wr_head = hist.wr_head.load(Ordering::Relaxed) as usize;
+        for i in 1..=wr_count {
+            let ts = hist.write_log[(wr_head + WRITE_HISTORY_SIZE - (i - 1)) % WRITE_HISTORY_SIZE]
+                .load(Ordering::Relaxed);
+            let age = (self.t_now.saturating_sub(ts)).max(1);
+            let sf = (i as f32) / (age as f32);
+            if sf > max_wr_sf {
+                max_wr_sf = sf;
+            }
+        }
+
+        max_ac_sf + (self.write_weight * max_wr_sf)
+    }
+
+    fn pick(
+        &mut self,
+        start_idx: usize,
+        mut f: impl FnMut(&K) -> Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let len = self.keys.len();
+        let n = self.sample_size.min(len);
+
+        let mut best_result: Option<(usize, usize)> = None;
+        let mut min_pv = f32::MAX;
+
+        for i in 0..n {
+            let idx = (start_idx + i) % len;
+            let key = &self.keys[idx];
+            let hist = self.history.get(key).unwrap();
+            let mut pv = self.calculate_pv(hist);
+
+            if let Some(disk_id) = (self.disk_id_extractor)(key) {
+                pv *= self.shared_weights.get_weight(disk_id);
+            }
+
+            if pv < min_pv {
+                if let Some(size) = f(key) {
+                    min_pv = pv;
+                    best_result = Some((idx, size));
+                }
+            }
+        }
+
+        best_result
+    }
+}
+
+impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WhattPolicy<K> {
+    fn name(&self) -> &'static str {
+        "WHATT"
+    }
+
+    fn max_evict_failures(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn on_access(&self, accessed_key: &K, access: CacheAccess) {
+        if let Some(hist) = self.history.get(accessed_key) {
+            let now = self.t_now;
+            if access == CacheAccess::WRITE {
+                let old_pos = hist.wr_head.load(Ordering::Relaxed);
+                if now != hist.write_log[old_pos as usize].load(Ordering::Relaxed) {
+                    let pos = (old_pos + 1) % (WRITE_HISTORY_SIZE as u8);
+                    hist.write_log[pos as usize].store(now, Ordering::Release);
+                    hist.wr_head.store(pos, Ordering::Release);
+
+                    let count = hist.wr_count.load(Ordering::Relaxed);
+                    if count < WRITE_HISTORY_SIZE as u8 {
+                        hist.wr_count.store(count + 1, Ordering::Relaxed);
+                    }
+                }
+            }
+
+            let old_pos = hist.ac_head.load(Ordering::Relaxed);
+            if now != hist.access_log[old_pos as usize].load(Ordering::Relaxed) {
+                let pos = (old_pos + 1) % (ACCESS_HISTORY_SIZE as u8);
+                hist.access_log[pos as usize].store(now, Ordering::Release);
+                hist.ac_head.store(pos, Ordering::Release);
+
+                let count = hist.ac_count.load(Ordering::Relaxed);
+                if count < ACCESS_HISTORY_SIZE as u8 {
+                    hist.ac_count.store(count + 1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    fn on_add(&mut self, added_key: K) {
+        let hist = WhattHistory::default();
+        hist.ac_head.store(0, Ordering::Relaxed);
+        hist.access_log[0].store(self.t_now, Ordering::Relaxed);
+        hist.ac_count.store(1, Ordering::Relaxed);
+        self.history.insert(added_key.clone(), hist);
+        self.keys.push(added_key);
+    }
+
+    fn on_remove(&mut self, removed_key: &K) -> Option<RemoveError> {
+        if self.history.remove(removed_key).is_some() {
+            if let Some(pos) = self.keys.iter().position(|k| k == removed_key) {
+                self.keys.swap_remove(pos);
+                let current_len = self.keys.len();
+                if current_len > 0 {
+                    if self.cursor.load(Ordering::Relaxed) >= current_len {
+                        self.cursor.store(0, Ordering::Relaxed);
+                    }
+                } else {
+                    self.cursor.store(0, Ordering::Relaxed);
+                }
+            }
+            self.eviction_count += 1;
+            if self.eviction_count >= self.epoch_threshold {
+                self.t_now += 1;
+                self.eviction_count = 0;
+            }
+            None
+        } else {
+            Some(RemoveError::NotPresent)
+        }
+    }
+
+    fn update(&mut self, old_key: &K, new_key: K) {
+        if let Some(hist) = self.history.remove(old_key) {
+            self.history.insert(new_key.clone(), hist);
+            if let Some(pos) = self.keys.iter().position(|k| k == old_key) {
+                self.keys[pos] = new_key;
+            }
+        }
+    }
+
+    fn pick_eviction_candidate(
+        &mut self,
+        mut f: &mut dyn FnMut(&K) -> Option<usize>,
+    ) -> Option<(K, usize)> {
+        let len = self.keys.len();
+        if len == 0 {
+            return None;
+        }
+
+        let n = self.sample_size.min(len);
+        for _ in 0..self.max_evict_failures() {
+            let start_idx = self.cursor.fetch_add(n, Ordering::Relaxed) % len;
+
+            if let Some((idx, size)) = self.pick(start_idx, &mut f) {
+                return Some((self.keys[idx].clone(), size));
+            }
+        }
+
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::CacheAccess;
+
+    #[test]
+    fn test_whatt_behaves_like_watt_with_equal_weights() {
+        let weights = SharedWeights::new();
+        let mut policy = WhattPolicy::new(100, weights, |_| None);
+        policy.on_add(1);
+        policy.on_add(2);
+
+        for i in 0..5 {
+            policy.on_access(&1, CacheAccess::READ);
+            // Trigger epoch increments by simulating removals
+            for j in 0..10 {
+                let dummy = 1000 + i * 100 + j;
+                policy.on_add(dummy);
+                policy.on_remove(&dummy);
+            }
+        }
+
+        // Key 2 should be the eviction candidate (lowest frequency)
+        assert_eq!(
+            policy.pick_eviction_candidate(&mut |_| Some(1)),
+            Some((2, 1))
+        );
+    }
+
+    #[test]
+    fn test_whatt_weight_preference() {
+        let weights = SharedWeights::new();
+        // Set weight for disk 1 to 10.0, disk 2 to 0.1
+        {
+            let mut w = weights.0.lock_write();
+            w[1] = 10.0;
+            w[2] = 0.1;
+        }
+
+        fn extractor(k: &u64) -> Option<GlobalDiskId> {
+            Some(GlobalDiskId(*k as u16))
+        }
+
+        let mut policy = WhattPolicy::new(100, weights, extractor);
+        policy.on_add(1); // Maps to disk 1 -> weight 10.0
+        policy.on_add(2); // Maps to disk 2 -> weight 0.1
+
+        for i in 0..5 {
+            policy.on_access(&1, CacheAccess::READ);
+            policy.on_access(&2, CacheAccess::READ);
+            for j in 0..10 {
+                let dummy = 1000 + i * 100 + j;
+                policy.on_add(dummy);
+                policy.on_remove(&dummy);
+            }
+        }
+
+        // Key 2 should be evicted because it has a much lower weight (0.1 vs 10.0) -> lower PV
+        assert_eq!(
+            policy.pick_eviction_candidate(&mut |_| Some(1)),
+            Some((2, 1))
+        );
+
+        // Let's reverse the weights and see if Key 1 is evicted instead
+        let weights2 = SharedWeights::new();
+        {
+            let mut w = weights2.0.lock_write();
+            w[1] = 0.1;
+            w[2] = 10.0;
+        }
+        let mut policy2 = WhattPolicy::new(100, weights2, extractor);
+        policy2.on_add(1);
+        policy2.on_add(2);
+
+        for i in 0..5 {
+            policy2.on_access(&1, CacheAccess::READ);
+            policy2.on_access(&2, CacheAccess::READ);
+            for j in 0..10 {
+                let dummy = 1000 + i * 100 + j;
+                policy2.on_add(dummy);
+                policy2.on_remove(&dummy);
+            }
+        }
+
+        // Now Key 1 should be evicted
+        assert_eq!(
+            policy2.pick_eviction_candidate(&mut |_| Some(1)),
+            Some((1, 1))
+        );
+    }
+}
