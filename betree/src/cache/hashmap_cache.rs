@@ -7,7 +7,7 @@ use crate::{
     cache::{
         cache_policy::CachePolicy,
         cache_util::{CacheStats, PinnedEntry},
-        CacheAccess,
+        CacheAccess, ClockCachePolicy,
     },
     size::SizeMut,
 };
@@ -23,7 +23,7 @@ use std::{
 /// A cache based on a `std::collections::HashMap` and a given `CachePolicy`.
 pub struct HashmapCache<K, V> {
     map: HashMap<K, Arc<V>>,
-    policy: Box<dyn CachePolicy<K>>,
+    policy: Box<ClockCachePolicy<K>>,
     capacity: usize,
     // Let's leak it
     size: &'static AtomicUsize,
@@ -36,7 +36,7 @@ pub struct HashmapCache<K, V> {
 
 impl<'a, K: 'a + Hash + Eq, V: SizeMut> HashmapCache<K, V> {
     /// Returns a new cache instance with the given `capacity`.
-    pub fn new(cache_policy: Box<dyn CachePolicy<K>>, capacity: usize) -> Self {
+    pub fn new(cache_policy: Box<ClockCachePolicy<K>>, capacity: usize) -> Self {
         HashmapCache {
             map: Default::default(),
             policy: cache_policy,
@@ -74,7 +74,7 @@ where
     type ValueRef = PinnedEntry<V>;
     type Stats = CacheStats;
 
-    fn new(capacity: usize, policy: Box<dyn CachePolicy<K>>) -> Self {
+    fn new(capacity: usize, policy: Box<ClockCachePolicy<K>>) -> Self {
         Self::new(policy, capacity)
     }
 

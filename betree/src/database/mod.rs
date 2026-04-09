@@ -163,9 +163,6 @@ pub struct DatabaseConfiguration {
     /// Whether to check for and open an existing database, or overwrite it
     pub access_mode: AccessMode,
 
-    /// Which cache policy to use
-    pub cache_policy: Policy,
-
     /// When set, try to sync all datasets every `sync_interval_ms` milliseconds
     pub sync_interval_ms: Option<u64>,
 
@@ -193,7 +190,6 @@ impl Default for DatabaseConfiguration {
             cache_size: DEFAULT_CACHE_SIZE,
             access_mode: AccessMode::OpenIfExists,
             sync_interval_ms: Some(DEFAULT_SYNC_INTERVAL_MS),
-            cache_policy: Policy::Clock,
             metrics: None,
             migration_policy: None,
             optimizer: None,
@@ -255,32 +251,6 @@ impl DatabaseConfiguration {
         }
     }
 
-    fn init_policy(&self) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
-        let storage_kind = self
-            .storage
-            .tiers
-            .get(self.default_storage_class as usize)
-            .map(|tier| tier.storage_kind)
-            .unwrap_or(crate::tree::StorageKind::Memory);
-
-        // HACK: copied from `min_size` in `tree/imp/node.rs`
-        let min_node_size = match storage_kind {
-            crate::tree::StorageKind::Hdd => 1024 * 1024,
-            crate::tree::StorageKind::Ssd => 512 * 1024,
-            crate::tree::StorageKind::Memory => 128 * 1024,
-        };
-
-        let item_capacity = std::cmp::max(1, self.cache_size / min_node_size);
-        match self.cache_policy {
-            Policy::ARC => Box::new(crate::cache::ArcCachePolicy::new(item_capacity)),
-            Policy::Clock => Box::new(ClockCachePolicy::new()),
-            Policy::LFU => Box::new(crate::cache::LFUCachePolicy::new()),
-            Policy::LRU => Box::new(LRUCachePolicy::new()),
-            Policy::WATT => Box::new(WattPolicy::new(item_capacity)),
-            Policy::Random => Box::new(RandomCachePolicy::new()),
-        }
-    }
-
     /// Create a new [Dmu] instance. This is the third step of the DB initialization.
     pub fn new_dmu(&self, spu: RootSpu, handler: DbHandler) -> RootDmu {
         let mut strategy: [[Option<u8>; NUM_STORAGE_CLASSES]; NUM_STORAGE_CLASSES] =
@@ -297,16 +267,13 @@ impl DatabaseConfiguration {
             }
         }
 
-        let policy = self.init_policy();
-        info!("Init DMU with policy: {}", policy.name());
-
         Dmu::new(
             self.compression.to_builder(),
             <Checksum as crate::checksum::Checksum>::builder(),
             self.default_storage_class,
             spu,
             strategy,
-            HashmapCache::new(policy, self.cache_size),
+            HashmapCache::new(Box::new(ClockCachePolicy::new()), self.cache_size),
             handler,
             #[cfg(feature = "allocation_log")]
             self.allocation_log_file_path.clone(),

@@ -45,7 +45,7 @@ pub trait Cache: Send + Sync {
     /// The cache policy to be used
 
     /// Constructs a new instance with the given `capacity` in bytes.
-    fn new(capacity: usize, policy: Box<dyn CachePolicy<Self::Key>>) -> Self;
+    fn new(capacity: usize, policy: Box<ClockCachePolicy<Self::Key>>) -> Self;
 
     /// The value returned by `get`. Holds a reference to the actual cache
     /// entry.
@@ -164,7 +164,6 @@ mod hashmap_cache;
 mod lfu_policy;
 mod lru_policy;
 mod random_policy;
-mod test;
 mod watt_policy;
 
 pub(crate) mod linked_list;
