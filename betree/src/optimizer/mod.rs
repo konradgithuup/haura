@@ -5,7 +5,7 @@ use crate::database::RootDmu;
 use crate::storage_pool::StoragePoolLayer;
 use crate::storage_pool::{DiskOffset, GlobalDiskId};
 use rand::Rng;
-use seqlock::SeqLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -14,17 +14,20 @@ use std::thread;
 pub const MAX_DEVICES: usize = 4096;
 
 /// Shared weight buffer using a Sequence Lock for wait-free reads on the cache path.
-pub struct SharedWeights(pub Arc<SeqLock<[f32; MAX_DEVICES]>>);
+#[derive(Clone)]
+pub struct SharedWeights(pub Arc<[AtomicU32; MAX_DEVICES]>);
 
 impl SharedWeights {
     pub fn new() -> Self {
-        Self(Arc::new(SeqLock::new([1.0; MAX_DEVICES])))
+        let initial_bits = 1.0_f32.to_bits();
+        let weights = std::array::from_fn(|_| AtomicU32::new(initial_bits));
+        Self(Arc::new(weights))
     }
 
     /// Fetches a weight for a specific device. Used by the Cache Policy.
     pub fn get_weight(&self, id: GlobalDiskId) -> f32 {
-        let weights = self.0.read();
-        weights[id.as_u16() as usize]
+        let bits = self.0[id.as_u16() as usize].load(Ordering::Acquire);
+        f32::from_bits(bits)
     }
 }
 
@@ -149,9 +152,8 @@ pub fn run_optimizer(dmu: Arc<RootDmu>, shared: SharedWeights, config: config::O
             }
         }
 
-        shared
-            .0
-            .lock_write()
-            .copy_from_slice(&state.current_weights);
+        for (i, &w) in state.current_weights.iter().enumerate() {
+            shared.0[i].store(w.to_bits(), Ordering::Release);
+        }
     }
 }

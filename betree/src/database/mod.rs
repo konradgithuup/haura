@@ -133,6 +133,8 @@ pub enum Policy {
     LRU,
     /// Write Aware Timestamp Tracking
     WATT,
+    /// Write and Hardware Aware Timestamp Tracking
+    WHATT,
 }
 
 /// A bundle type of component configuration types, used during [Database::build]
@@ -255,7 +257,10 @@ impl DatabaseConfiguration {
         }
     }
 
-    fn init_policy(&self) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
+    fn init_policy(
+        &self,
+        shared_weights: crate::optimizer::SharedWeights,
+    ) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
         let storage_kind = self
             .storage
             .tiers
@@ -277,12 +282,25 @@ impl DatabaseConfiguration {
             Policy::LFU => Box::new(crate::cache::LFUCachePolicy::new()),
             Policy::LRU => Box::new(LRUCachePolicy::new()),
             Policy::WATT => Box::new(WattPolicy::new(item_capacity)),
+            Policy::WHATT => Box::new(crate::cache::WhattPolicy::new(
+                item_capacity,
+                shared_weights,
+                |key| match key {
+                    ObjectKey::Unmodified { offset, .. } => Some(offset.class_disk_id()),
+                    _ => None,
+                },
+            )),
             Policy::Random => Box::new(RandomCachePolicy::new()),
         }
     }
 
     /// Create a new [Dmu] instance. This is the third step of the DB initialization.
-    pub fn new_dmu(&self, spu: RootSpu, handler: DbHandler) -> RootDmu {
+    pub fn new_dmu(
+        &self,
+        spu: RootSpu,
+        handler: DbHandler,
+        policy: Box<dyn CachePolicy<ObjectKey<Generation>>>,
+    ) -> RootDmu {
         let mut strategy: [[Option<u8>; NUM_STORAGE_CLASSES]; NUM_STORAGE_CLASSES] =
             [[None; NUM_STORAGE_CLASSES]; NUM_STORAGE_CLASSES];
 
@@ -297,7 +315,6 @@ impl DatabaseConfiguration {
             }
         }
 
-        let policy = self.init_policy();
         info!("Init DMU with policy: {}", policy.name());
 
         Dmu::new(
@@ -500,7 +517,11 @@ impl Database {
     ) -> Result<Self> {
         let spl = builder.new_spu()?;
         let handler = builder.new_handler(&spl);
-        let mut dmu = builder.new_dmu(spl, handler);
+
+        let shared_weights = crate::optimizer::SharedWeights::new();
+        let policy = builder.init_policy(shared_weights.clone());
+        let mut dmu = builder.new_dmu(spl, handler, policy);
+
         if let Some(tx) = &dml_tx {
             dmu.set_report(tx.clone());
         }
@@ -509,10 +530,9 @@ impl Database {
         dmu.write_global_header()?;
 
         let dmu = Arc::new(dmu);
-        let shared_weights = crate::optimizer::SharedWeights::new();
         if let Some(opt_cfg) = builder.optimizer {
             let dmu_clone = Arc::clone(&dmu);
-            let weights_clone = crate::optimizer::SharedWeights(Arc::clone(&shared_weights.0));
+            let weights_clone = shared_weights;
             thread::spawn(move || {
                 crate::optimizer::run_optimizer(dmu_clone, weights_clone, opt_cfg);
             });

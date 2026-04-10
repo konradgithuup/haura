@@ -310,11 +310,8 @@ mod tests {
     fn test_whatt_weight_preference() {
         let weights = SharedWeights::new();
         // Set weight for disk 1 to 10.0, disk 2 to 0.1
-        {
-            let mut w = weights.0.lock_write();
-            w[1] = 10.0;
-            w[2] = 0.1;
-        }
+        weights.0[1].store(10.0_f32.to_bits(), Ordering::Release);
+        weights.0[2].store(0.1_f32.to_bits(), Ordering::Release);
 
         fn extractor(k: &u64) -> Option<GlobalDiskId> {
             Some(GlobalDiskId(*k as u16))
@@ -342,11 +339,9 @@ mod tests {
 
         // Let's reverse the weights and see if Key 1 is evicted instead
         let weights2 = SharedWeights::new();
-        {
-            let mut w = weights2.0.lock_write();
-            w[1] = 0.1;
-            w[2] = 10.0;
-        }
+        weights2.0[1].store(0.1_f32.to_bits(), Ordering::Release);
+        weights2.0[2].store(10.0_f32.to_bits(), Ordering::Release);
+
         let mut policy2 = WhattPolicy::new(100, weights2, extractor);
         policy2.on_add(1);
         policy2.on_add(2);
