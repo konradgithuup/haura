@@ -1,7 +1,7 @@
 //! This module provides the Write-Aware Timestamp Tracking (WATT) cache policy.
 use crate::cache::cache_policy::CachePolicy;
 use crate::cache::{CacheAccess, RemoveError};
-use std::collections::HashMap;
+use gxhash::HashMap;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
@@ -12,6 +12,9 @@ const DEFAULT_WRITE_WEIGHT: f32 = 4.0;
 const RECENCY_DAMPENING: f32 = 0.1;
 const EPOCH_DIVISOR: usize = 10;
 
+const ACCESS_NUMERATORS: [f32; ACCESS_HISTORY_SIZE] = [0.1, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+const WRITE_NUMERATORS: [f32; WRITE_HISTORY_SIZE] = [1.0, 2.0, 3.0, 4.0];
+
 #[derive(Debug)]
 struct WattHistory {
     access_log: [AtomicU32; ACCESS_HISTORY_SIZE],
@@ -20,6 +23,7 @@ struct WattHistory {
     wr_head: AtomicU8,
     ac_count: AtomicU8,
     wr_count: AtomicU8,
+    key_index: usize,
 }
 
 impl Clone for WattHistory {
@@ -35,6 +39,7 @@ impl Clone for WattHistory {
             wr_head: AtomicU8::new(self.wr_head.load(Ordering::Relaxed)),
             ac_count: AtomicU8::new(self.ac_count.load(Ordering::Relaxed)),
             wr_count: AtomicU8::new(self.wr_count.load(Ordering::Relaxed)),
+            key_index: self.key_index,
         }
     }
 }
@@ -48,6 +53,7 @@ impl Default for WattHistory {
             wr_head: AtomicU8::new((WRITE_HISTORY_SIZE - 1) as u8),
             ac_count: AtomicU8::new(0),
             wr_count: AtomicU8::new(0),
+            key_index: 0,
         }
     }
 }
@@ -68,7 +74,7 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
     /// Init WATT cache policy
     pub fn new(cache_capacity_blocks: usize) -> Self {
         Self {
-            history: HashMap::new(),
+            history: HashMap::default(),
             keys: Vec::new(),
             cursor: AtomicUsize::new(0),
             t_now: 1,
@@ -87,11 +93,10 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
             let ts = hist.access_log
                 [(ac_head + ACCESS_HISTORY_SIZE - (i - 1)) % ACCESS_HISTORY_SIZE]
                 .load(Ordering::Relaxed);
-            let age = (self.t_now.saturating_sub(ts)).max(1);
-            let mut sf = (i as f32) / (age as f32);
-            if i == 1 {
-                sf *= RECENCY_DAMPENING;
-            }
+            let age = (self.t_now.saturating_sub(ts)).max(1) as f32;
+
+            let sf = ACCESS_NUMERATORS[i - 1] / age;
+
             if sf > max_ac_sf {
                 max_ac_sf = sf;
             }
@@ -103,8 +108,10 @@ impl<K: Eq + Hash + Clone> WattPolicy<K> {
         for i in 1..=wr_count {
             let ts = hist.write_log[(wr_head + WRITE_HISTORY_SIZE - (i - 1)) % WRITE_HISTORY_SIZE]
                 .load(Ordering::Relaxed);
-            let age = (self.t_now.saturating_sub(ts)).max(1);
-            let sf = (i as f32) / (age as f32);
+            let age = (self.t_now.saturating_sub(ts)).max(1) as f32;
+
+            let sf = WRITE_NUMERATORS[i - 1] / age;
+
             if sf > max_wr_sf {
                 max_wr_sf = sf;
             }
@@ -154,10 +161,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
     fn on_access(&self, accessed_key: &K, access: CacheAccess) {
         if let Some(hist) = self.history.get(accessed_key) {
             let now = self.t_now;
+
+            let old_ac_pos = hist.ac_head.load(Ordering::Relaxed);
+            let ac_up_to_date = hist.access_log[old_ac_pos as usize].load(Ordering::Relaxed) == now;
+
+            if access == CacheAccess::READ && ac_up_to_date {
+                return;
+            }
+
             if access == CacheAccess::WRITE {
-                let old_pos = hist.wr_head.load(Ordering::Relaxed);
-                if now != hist.write_log[old_pos as usize].load(Ordering::Relaxed) {
-                    let pos = (old_pos + 1) % (WRITE_HISTORY_SIZE as u8);
+                let old_wr_pos = hist.wr_head.load(Ordering::Relaxed);
+                if hist.write_log[old_wr_pos as usize].load(Ordering::Relaxed) != now {
+                    let pos = (old_wr_pos + 1) % (WRITE_HISTORY_SIZE as u8);
                     hist.write_log[pos as usize].store(now, Ordering::Release);
                     hist.wr_head.store(pos, Ordering::Release);
 
@@ -168,9 +183,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
                 }
             }
 
-            let old_pos = hist.ac_head.load(Ordering::Relaxed);
-            if now != hist.access_log[old_pos as usize].load(Ordering::Relaxed) {
-                let pos = (old_pos + 1) % (ACCESS_HISTORY_SIZE as u8);
+            if !ac_up_to_date {
+                let pos = (old_ac_pos + 1) % (ACCESS_HISTORY_SIZE as u8);
                 hist.access_log[pos as usize].store(now, Ordering::Release);
                 hist.ac_head.store(pos, Ordering::Release);
 
@@ -183,28 +197,38 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
     }
 
     fn on_add(&mut self, added_key: K) {
-        let hist = WattHistory::default();
+        let mut hist = WattHistory::default();
         hist.ac_head.store(0, Ordering::Relaxed);
         hist.access_log[0].store(self.t_now, Ordering::Relaxed);
         hist.ac_count.store(1, Ordering::Relaxed);
+        hist.key_index = self.keys.len();
         self.history.insert(added_key.clone(), hist);
         self.keys.push(added_key);
     }
 
     fn on_remove(&mut self, removed_key: &K) -> Option<RemoveError> {
-        if self.history.remove(removed_key).is_some() {
-            if let Some(pos) = self.keys.iter().position(|k| k == removed_key) {
-                self.keys.swap_remove(pos);
-                // Adjust cursor if swap_remove affected it
-                let current_len = self.keys.len();
-                if current_len > 0 {
-                    if self.cursor.load(Ordering::Relaxed) >= current_len {
-                        self.cursor.store(0, Ordering::Relaxed);
-                    }
-                } else {
-                    self.cursor.store(0, Ordering::Relaxed);
+        if let Some(hist) = self.history.remove(removed_key) {
+            let pos = hist.key_index;
+            self.keys.swap_remove(pos);
+
+            let current_len = self.keys.len();
+            // If the removed element wasn't the last one, the element that was swapped into `pos`
+            // needs its index updated.
+            if pos < current_len {
+                let swapped_key = &self.keys[pos];
+                if let Some(swapped_hist) = self.history.get_mut(swapped_key) {
+                    swapped_hist.key_index = pos;
                 }
             }
+
+            if current_len > 0 {
+                if self.cursor.load(Ordering::Relaxed) >= current_len {
+                    self.cursor.store(0, Ordering::Relaxed);
+                }
+            } else {
+                self.cursor.store(0, Ordering::Relaxed);
+            }
+
             self.eviction_count += 1;
             if self.eviction_count >= self.epoch_threshold {
                 self.t_now += 1;
@@ -217,11 +241,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WattPolicy
     }
 
     fn update(&mut self, old_key: &K, new_key: K) {
-        if let Some(hist) = self.history.remove(old_key) {
-            self.history.insert(new_key.clone(), hist);
-            if let Some(pos) = self.keys.iter().position(|k| k == old_key) {
-                self.keys[pos] = new_key;
-            }
+        if let Some(mut hist) = self.history.remove(old_key) {
+            let pos = hist.key_index;
+            self.keys[pos] = new_key.clone();
+            self.history.insert(new_key, hist);
         }
     }
 
