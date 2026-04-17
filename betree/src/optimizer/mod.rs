@@ -123,11 +123,18 @@ pub fn run_optimizer(dmu: Arc<RootDmu>, shared: SharedWeights, config: config::O
         let abs_change = (latency - state.prev_latency).abs();
 
         if abs_change < config.min_change && state.temperature < config.min_temperature {
-            // Hibernate
+            log::debug!(
+                "Optimizer: Hibernating (latency: {:.2}ns, temp: {:.2})",
+                latency,
+                state.temperature
+            );
             state.current_weights = state.best_weights;
             state.prev_latency = state.best_latency;
         } else if abs_change > config.max_idle && state.temperature < config.min_temperature {
-            // Wake-Up
+            log::debug!(
+                "Optimizer: Wake-up triggered by latency spike ({:.2}ns)",
+                latency
+            );
             state.prev_weights = state.current_weights;
             let src = state.current_weights;
             state.mutate(&src, config.mutation_spread);
@@ -137,14 +144,22 @@ pub fn run_optimizer(dmu: Arc<RootDmu>, shared: SharedWeights, config: config::O
             let prob = (-delta_l / state.temperature as f64).exp();
 
             if delta_l < 0.0 || rng.gen_bool(prob.clamp(0.0, 1.0)) {
-                // Explore
+                log::debug!(
+                    "Optimizer: Explore - Accepted new weights (latency: {:.2}ns, temp: {:.2})",
+                    latency,
+                    state.temperature
+                );
                 state.prev_weights = state.current_weights;
                 state.prev_latency = latency;
                 let src = state.current_weights;
                 state.mutate(&src, config.mutation_spread);
                 state.temperature *= config.cooling_factor;
             } else {
-                // Exploit
+                log::debug!(
+                    "Optimizer: Exploit - Reverting weights (latency: {:.2}ns, temp: {:.2})",
+                    latency,
+                    state.temperature
+                );
                 state.current_weights = state.prev_weights;
                 let src = state.prev_weights;
                 state.mutate(&src, config.mutation_spread);
