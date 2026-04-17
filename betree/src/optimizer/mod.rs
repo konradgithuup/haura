@@ -40,8 +40,9 @@ pub struct OptimizerState {
     best_weights: [f32; MAX_DEVICES],
     // Storage for previous vdev counters to calculate delta latency
     // Index matches GlobalDiskId
-    prev_stats_nanos: [u64; MAX_DEVICES], // (total_nanos, op_count)
-    prev_stats_count: [u64; MAX_DEVICES], // (total_nanos, op_count)
+    prev_stats_nanos: [u64; MAX_DEVICES],
+    prev_stats_count: [u64; MAX_DEVICES],
+    active_devices: Vec<GlobalDiskId>,
 }
 
 impl OptimizerState {
@@ -55,6 +56,7 @@ impl OptimizerState {
             best_weights: [1.0; MAX_DEVICES],
             prev_stats_nanos: [0; MAX_DEVICES],
             prev_stats_count: [0; MAX_DEVICES],
+            active_devices: Vec::with_capacity(16),
         }
     }
 
@@ -62,12 +64,14 @@ impl OptimizerState {
         let metrics = dmu.spl().metrics();
         let mut total_nanos = 0;
         let mut total_count = 0;
+        self.active_devices.clear();
 
         for (tier_idx, tier) in metrics.tiers.iter().enumerate() {
             if let Some(tier_metrics) = tier {
                 for (vdev_idx, stats) in tier_metrics.vdevs.iter().enumerate() {
                     let g_id = DiskOffset::construct_disk_id(tier_idx as u8, vdev_idx as u16);
                     let idx = g_id.as_u16() as usize;
+                    self.active_devices.push(g_id);
 
                     let current_nanos =
                         stats.read_latency_total_nanos + stats.written_latency_total_nanos;
@@ -96,7 +100,8 @@ impl OptimizerState {
 
     fn mutate(&mut self, source: &[f32; MAX_DEVICES], spread: f32) {
         let mut rng = rand::thread_rng();
-        for i in 0..MAX_DEVICES {
+        for id in &self.active_devices {
+            let i = id.as_u16() as usize;
             let delta = rng.gen_range(-spread..spread);
             self.current_weights[i] = (source[i] + delta).clamp(0.1, 10.0);
         }
@@ -167,8 +172,9 @@ pub fn run_optimizer(dmu: Arc<RootDmu>, shared: SharedWeights, config: config::O
             }
         }
 
-        for (i, &w) in state.current_weights.iter().enumerate() {
-            shared.0[i].store(w.to_bits(), Ordering::Release);
+        for id in &state.active_devices {
+            let i = id.as_u16() as usize;
+            shared.0[i].store(state.current_weights[i].to_bits(), Ordering::Release);
         }
     }
 }
