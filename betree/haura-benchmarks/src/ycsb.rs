@@ -56,56 +56,55 @@ pub fn a(mut client: KvClient, size: u64, threads: usize, runtime: u64) {
     let mut w = std::io::BufWriter::new(f);
     w.write_all(b"threads,ops,time_ns\n").unwrap();
 
-    for workers in 1..=threads {
-        println!("Running benchmark with {workers} threads...");
-        let threads = (0..workers)
-            .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
-            .enumerate()
-            .map(|(id, (tx, rx))| {
-                let keys = keys.clone();
-                let ds = client.ds.clone();
-                (
-                    std::thread::spawn(move || {
-                        let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
-                        let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
-                        let mut total = 0;
-                        let value = vec![0u8; ENTRY_SIZE];
-                        while let Ok(start) = rx.recv() {
-                            while start.elapsed().as_secs() < runtime {
-                                for _ in 0..100 {
-                                    let k = &keys[dist.sample(&mut rng) - 1][..];
-                                    if rng.gen_bool(0.5) {
-                                        ds.get(k).unwrap().unwrap();
-                                    } else {
-                                        ds.upsert(k.to_vec(), &value, 0).unwrap();
-                                    }
-                                    total += 1;
+    let workers = threads;
+    println!("Running benchmark with {workers} threads...");
+    let threads = (0..workers)
+        .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
+        .enumerate()
+        .map(|(id, (tx, rx))| {
+            let keys = keys.clone();
+            let ds = client.ds.clone();
+            (
+                std::thread::spawn(move || {
+                    let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
+                    let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
+                    let mut total = 0;
+                    let value = vec![0u8; ENTRY_SIZE];
+                    while let Ok(start) = rx.recv() {
+                        while start.elapsed().as_secs() < runtime {
+                            for _ in 0..100 {
+                                let k = &keys[dist.sample(&mut rng) - 1][..];
+                                if rng.gen_bool(0.5) {
+                                    ds.get(k).unwrap().unwrap();
+                                } else {
+                                    ds.upsert(k.to_vec(), &value, 0).unwrap();
                                 }
+                                total += 1;
                             }
                         }
-                        total
-                    }),
-                    tx,
-                )
-            })
-            .collect::<Vec<_>>();
-        client.db.read().drop_cache().unwrap();
-        let start = std::time::Instant::now();
-        for (_t, tx) in threads.iter() {
-            tx.send(start).unwrap();
-        }
-        let mut total = 0;
-        for (t, tx) in threads.into_iter() {
-            drop(tx);
-            total += t.join().unwrap();
-        }
-        let end = start.elapsed();
-        w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
-            .unwrap();
-        w.flush().unwrap();
-        println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
-        println!("          {} ns avg", end.as_nanos() / total);
+                    }
+                    total
+                }),
+                tx,
+            )
+        })
+        .collect::<Vec<_>>();
+    client.db.read().drop_cache().unwrap();
+    let start = std::time::Instant::now();
+    for (_t, tx) in threads.iter() {
+        tx.send(start).unwrap();
     }
+    let mut total = 0;
+    for (t, tx) in threads.into_iter() {
+        drop(tx);
+        total += t.join().unwrap();
+    }
+    let end = start.elapsed();
+    w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
+        .unwrap();
+    w.flush().unwrap();
+    println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
+    println!("          {} ns avg", end.as_nanos() / total);
 }
 
 /// B - Read heavy
@@ -127,58 +126,57 @@ pub fn b(mut client: KvClient, size: u64, threads: usize, runtime: u64) {
     let mut w = std::io::BufWriter::new(f);
     w.write_all(b"threads,ops,time_ns\n").unwrap();
 
-    for workers in 1..=threads {
-        println!("Running benchmark with {workers} threads...");
-        let threads = (0..workers)
-            .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
-            .enumerate()
-            .map(|(id, (tx, rx))| {
-                let keys = keys.clone();
-                let ds = client.ds.clone();
-                (
-                    std::thread::spawn(move || {
-                        let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
-                        let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
-                        let mut total = 0;
-                        let value = vec![0u8; ENTRY_SIZE];
-                        while let Ok(start) = rx.recv() {
-                            while start.elapsed().as_secs() < runtime {
-                                for _ in 0..100 {
-                                    let k = &keys[dist.sample(&mut rng) - 1][..];
-                                    if rng.gen_bool(0.95) {
-                                        // 95% reads
-                                        ds.get(k).unwrap().unwrap();
-                                    } else {
-                                        // 5% updates
-                                        ds.upsert(k.to_vec(), &value, 0).unwrap();
-                                    }
-                                    total += 1;
+    let workers = threads;
+    println!("Running benchmark with {workers} threads...");
+    let threads = (0..workers)
+        .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
+        .enumerate()
+        .map(|(id, (tx, rx))| {
+            let keys = keys.clone();
+            let ds = client.ds.clone();
+            (
+                std::thread::spawn(move || {
+                    let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
+                    let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
+                    let mut total = 0;
+                    let value = vec![0u8; ENTRY_SIZE];
+                    while let Ok(start) = rx.recv() {
+                        while start.elapsed().as_secs() < runtime {
+                            for _ in 0..100 {
+                                let k = &keys[dist.sample(&mut rng) - 1][..];
+                                if rng.gen_bool(0.95) {
+                                    // 95% reads
+                                    ds.get(k).unwrap().unwrap();
+                                } else {
+                                    // 5% updates
+                                    ds.upsert(k.to_vec(), &value, 0).unwrap();
                                 }
+                                total += 1;
                             }
                         }
-                        total
-                    }),
-                    tx,
-                )
-            })
-            .collect::<Vec<_>>();
-        client.db.read().drop_cache().unwrap();
-        let start = std::time::Instant::now();
-        for (_t, tx) in threads.iter() {
-            tx.send(start).unwrap();
-        }
-        let mut total = 0;
-        for (t, tx) in threads.into_iter() {
-            drop(tx);
-            total += t.join().unwrap();
-        }
-        let end = start.elapsed();
-        w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
-            .unwrap();
-        w.flush().unwrap();
-        println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
-        println!("          {} ns avg", end.as_nanos() / total);
+                    }
+                    total
+                }),
+                tx,
+            )
+        })
+        .collect::<Vec<_>>();
+    client.db.read().drop_cache().unwrap();
+    let start = std::time::Instant::now();
+    for (_t, tx) in threads.iter() {
+        tx.send(start).unwrap();
     }
+    let mut total = 0;
+    for (t, tx) in threads.into_iter() {
+        drop(tx);
+        total += t.join().unwrap();
+    }
+    let end = start.elapsed();
+    w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
+        .unwrap();
+    w.flush().unwrap();
+    println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
+    println!("          {} ns avg", end.as_nanos() / total);
 }
 
 /// C - Read heavy
@@ -199,52 +197,51 @@ pub fn c(mut client: KvClient, size: u64, threads: usize, runtime: u64) {
     let mut w = std::io::BufWriter::new(f);
     w.write_all(b"threads,ops,time_ns\n").unwrap();
 
-    for workers in 1..=threads {
-        println!("Running benchmark with {workers} threads...");
-        let threads = (0..workers)
-            .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
-            .enumerate()
-            .map(|(id, (tx, rx))| {
-                let keys = keys.clone();
-                let ds = client.ds.clone();
-                (
-                    std::thread::spawn(move || {
-                        let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
-                        let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
-                        let mut total = 0;
-                        while let Ok(start) = rx.recv() {
-                            while start.elapsed().as_secs() < runtime {
-                                for _ in 0..100 {
-                                    ds.get(&keys[dist.sample(&mut rng) - 1][..])
-                                        .unwrap()
-                                        .unwrap();
-                                    total += 1;
-                                }
+    let workers = threads;
+    println!("Running benchmark with {workers} threads...");
+    let threads = (0..workers)
+        .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
+        .enumerate()
+        .map(|(id, (tx, rx))| {
+            let keys = keys.clone();
+            let ds = client.ds.clone();
+            (
+                std::thread::spawn(move || {
+                    let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
+                    let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
+                    let mut total = 0;
+                    while let Ok(start) = rx.recv() {
+                        while start.elapsed().as_secs() < runtime {
+                            for _ in 0..100 {
+                                ds.get(&keys[dist.sample(&mut rng) - 1][..])
+                                    .unwrap()
+                                    .unwrap();
+                                total += 1;
                             }
                         }
-                        total
-                    }),
-                    tx,
-                )
-            })
-            .collect::<Vec<_>>();
-        client.db.read().drop_cache().unwrap();
-        let start = std::time::Instant::now();
-        for (_t, tx) in threads.iter() {
-            tx.send(start).unwrap();
-        }
-        let mut total = 0;
-        for (t, tx) in threads.into_iter() {
-            drop(tx);
-            total += t.join().unwrap();
-        }
-        let end = start.elapsed();
-        w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
-            .unwrap();
-        w.flush().unwrap();
-        println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
-        println!("          {} ns avg", end.as_nanos() / total);
+                    }
+                    total
+                }),
+                tx,
+            )
+        })
+        .collect::<Vec<_>>();
+    client.db.read().drop_cache().unwrap();
+    let start = std::time::Instant::now();
+    for (_t, tx) in threads.iter() {
+        tx.send(start).unwrap();
     }
+    let mut total = 0;
+    for (t, tx) in threads.into_iter() {
+        drop(tx);
+        total += t.join().unwrap();
+    }
+    let end = start.elapsed();
+    w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
+        .unwrap();
+    w.flush().unwrap();
+    println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
+    println!("          {} ns avg", end.as_nanos() / total);
 }
 
 /// D - Read latest
@@ -282,68 +279,66 @@ pub fn d(mut client: KvClient, size: u64, threads: usize, runtime: u64) {
     // Create thread-safe current_size
     let current_size = Arc::new(AtomicUsize::new(initial_size as usize));
 
-    for workers in 1..=threads {
-        println!("Running benchmark with {workers} threads...");
-        let threads = (0..workers)
-            .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
-            .enumerate()
-            .map(|(id, (tx, rx))| {
-                let keys = keys.clone();
-                let ds = client.ds.clone();
-                let current_size = Arc::clone(&current_size);
-                (
-                    std::thread::spawn(move || {
-                        let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
-                        let mut total = 0;
-                        let value = vec![0u8; ENTRY_SIZE];
+    let workers = threads;
+    println!("Running benchmark with {workers} threads...");
+    let threads = (0..workers)
+        .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
+        .enumerate()
+        .map(|(id, (tx, rx))| {
+            let keys = keys.clone();
+            let ds = client.ds.clone();
+            let current_size = Arc::clone(&current_size);
+            (
+                std::thread::spawn(move || {
+                    let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
+                    let mut total = 0;
+                    let value = vec![0u8; ENTRY_SIZE];
 
-                        while let Ok(start) = rx.recv() {
-                            while start.elapsed().as_secs() < runtime {
-                                for _ in 0..100 {
-                                    if rng.gen_bool(0.95) {
-                                        // 95% reads using skewed latest distribution
-                                        let max = current_size.load(AtomicOrdering::Relaxed);
-                                        // Generate zipfian value and subtract from max to favor recent items
-                                        let dist =
-                                            zipf::ZipfDistribution::new(max, ZIPF_EXP).unwrap();
-                                        let offset = dist.sample(&mut rng);
-                                        let idx = max.saturating_sub(offset);
-                                        ds.get(&keys[idx][..]).unwrap();
-                                    } else {
-                                        // 5% inserts of new records
-                                        let current = current_size.load(AtomicOrdering::Relaxed);
-                                        if current < keys.len() {
-                                            ds.insert(keys[current].to_vec(), &value).unwrap();
-                                            current_size.fetch_add(1, AtomicOrdering::Relaxed);
-                                        }
+                    while let Ok(start) = rx.recv() {
+                        while start.elapsed().as_secs() < runtime {
+                            for _ in 0..100 {
+                                if rng.gen_bool(0.95) {
+                                    // 95% reads using skewed latest distribution
+                                    let max = current_size.load(AtomicOrdering::Relaxed);
+                                    // Generate zipfian value and subtract from max to favor recent items
+                                    let dist = zipf::ZipfDistribution::new(max, ZIPF_EXP).unwrap();
+                                    let offset = dist.sample(&mut rng);
+                                    let idx = max.saturating_sub(offset);
+                                    ds.get(&keys[idx][..]).unwrap();
+                                } else {
+                                    // 5% inserts of new records
+                                    let current = current_size.load(AtomicOrdering::Relaxed);
+                                    if current < keys.len() {
+                                        ds.insert(keys[current].to_vec(), &value).unwrap();
+                                        current_size.fetch_add(1, AtomicOrdering::Relaxed);
                                     }
-                                    total += 1;
                                 }
+                                total += 1;
                             }
                         }
-                        total
-                    }),
-                    tx,
-                )
-            })
-            .collect::<Vec<_>>();
-        client.db.read().drop_cache().unwrap();
-        let start = std::time::Instant::now();
-        for (_t, tx) in threads.iter() {
-            tx.send(start).unwrap();
-        }
-        let mut total = 0;
-        for (t, tx) in threads.into_iter() {
-            drop(tx);
-            total += t.join().unwrap();
-        }
-        let end = start.elapsed();
-        w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
-            .unwrap();
-        w.flush().unwrap();
-        println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
-        println!("          {} ns avg", end.as_nanos() / total);
+                    }
+                    total
+                }),
+                tx,
+            )
+        })
+        .collect::<Vec<_>>();
+    client.db.read().drop_cache().unwrap();
+    let start = std::time::Instant::now();
+    for (_t, tx) in threads.iter() {
+        tx.send(start).unwrap();
     }
+    let mut total = 0;
+    for (t, tx) in threads.into_iter() {
+        drop(tx);
+        total += t.join().unwrap();
+    }
+    let end = start.elapsed();
+    w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
+        .unwrap();
+    w.flush().unwrap();
+    println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
+    println!("          {} ns avg", end.as_nanos() / total);
 }
 
 /// E - Short Ranges
@@ -379,76 +374,74 @@ pub fn e(mut client: KvClient, size: u64, threads: usize, runtime: u64) {
     // Thread-safe current size tracking
     let current_size = Arc::new(AtomicUsize::new(initial_size as usize));
 
-    for workers in 1..=threads {
-        println!("Running benchmark with {workers} threads...");
-        let threads = (0..workers)
-            .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
-            .enumerate()
-            .map(|(id, (tx, rx))| {
-                let keys = keys.clone();
-                let ds = client.ds.clone();
-                let current_size = Arc::clone(&current_size);
-                (
-                    std::thread::spawn(move || {
-                        let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
-                        let mut total = 0;
-                        let value = vec![0u8; ENTRY_SIZE];
+    let workers = threads;
+    println!("Running benchmark with {workers} threads...");
+    let threads = (0..workers)
+        .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
+        .enumerate()
+        .map(|(id, (tx, rx))| {
+            let keys = keys.clone();
+            let ds = client.ds.clone();
+            let current_size = Arc::clone(&current_size);
+            (
+                std::thread::spawn(move || {
+                    let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
+                    let mut total = 0;
+                    let value = vec![0u8; ENTRY_SIZE];
 
-                        while let Ok(start) = rx.recv() {
-                            while start.elapsed().as_secs() < runtime {
-                                for _ in 0..100 {
-                                    if rng.gen_bool(0.95) {
-                                        // 95% scans
-                                        let max = current_size.load(AtomicOrdering::Relaxed);
-                                        // Get start key using zipfian
-                                        let dist =
-                                            zipf::ZipfDistribution::new(max, ZIPF_EXP).unwrap();
-                                        let start_idx = dist.sample(&mut rng) - 1;
+                    while let Ok(start) = rx.recv() {
+                        while start.elapsed().as_secs() < runtime {
+                            for _ in 0..100 {
+                                if rng.gen_bool(0.95) {
+                                    // 95% scans
+                                    let max = current_size.load(AtomicOrdering::Relaxed);
+                                    // Get start key using zipfian
+                                    let dist = zipf::ZipfDistribution::new(max, ZIPF_EXP).unwrap();
+                                    let start_idx = dist.sample(&mut rng) - 1;
 
-                                        // Uniform random scan length between 1 and 100
-                                        let scan_length = rng.gen_range(1..=100);
-                                        let end_idx = (start_idx + scan_length).min(max - 1);
+                                    // Uniform random scan length between 1 and 100
+                                    let scan_length = rng.gen_range(1..=100);
+                                    let end_idx = (start_idx + scan_length).min(max - 1);
 
-                                        // Perform the range scan
-                                        let start_key = &keys[start_idx][..];
-                                        let end_key = &keys[end_idx][..];
-                                        // Consume the iterator to actually perform the scan
-                                        for _entry in ds.range(start_key..end_key).unwrap() {}
-                                    } else {
-                                        // 5% inserts of new records
-                                        let current = current_size.load(AtomicOrdering::Relaxed);
-                                        if current < keys.len() {
-                                            ds.insert(keys[current].to_vec(), &value).unwrap();
-                                            current_size.fetch_add(1, AtomicOrdering::Relaxed);
-                                        }
+                                    // Perform the range scan
+                                    let start_key = &keys[start_idx][..];
+                                    let end_key = &keys[end_idx][..];
+                                    // Consume the iterator to actually perform the scan
+                                    for _entry in ds.range(start_key..end_key).unwrap() {}
+                                } else {
+                                    // 5% inserts of new records
+                                    let current = current_size.load(AtomicOrdering::Relaxed);
+                                    if current < keys.len() {
+                                        ds.insert(keys[current].to_vec(), &value).unwrap();
+                                        current_size.fetch_add(1, AtomicOrdering::Relaxed);
                                     }
-                                    total += 1;
                                 }
+                                total += 1;
                             }
                         }
-                        total
-                    }),
-                    tx,
-                )
-            })
-            .collect::<Vec<_>>();
-        client.db.read().drop_cache().unwrap();
-        let start = std::time::Instant::now();
-        for (_t, tx) in threads.iter() {
-            tx.send(start).unwrap();
-        }
-        let mut total = 0;
-        for (t, tx) in threads.into_iter() {
-            drop(tx);
-            total += t.join().unwrap();
-        }
-        let end = start.elapsed();
-        w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
-            .unwrap();
-        w.flush().unwrap();
-        println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
-        println!("          {} ns avg", end.as_nanos() / total);
+                    }
+                    total
+                }),
+                tx,
+            )
+        })
+        .collect::<Vec<_>>();
+    client.db.read().drop_cache().unwrap();
+    let start = std::time::Instant::now();
+    for (_t, tx) in threads.iter() {
+        tx.send(start).unwrap();
     }
+    let mut total = 0;
+    for (t, tx) in threads.into_iter() {
+        drop(tx);
+        total += t.join().unwrap();
+    }
+    let end = start.elapsed();
+    w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
+        .unwrap();
+    w.flush().unwrap();
+    println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
+    println!("          {} ns avg", end.as_nanos() / total);
 }
 
 /// F - Read-modify-write
@@ -470,58 +463,57 @@ pub fn f(mut client: KvClient, size: u64, threads: usize, runtime: u64) {
     let mut w = std::io::BufWriter::new(f);
     w.write_all(b"threads,ops,time_ns\n").unwrap();
 
-    for workers in 1..=threads {
-        println!("Running benchmark with {workers} threads...");
-        let threads = (0..workers)
-            .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
-            .enumerate()
-            .map(|(id, (tx, rx))| {
-                let keys = keys.clone();
-                let ds = client.ds.clone();
-                (
-                    std::thread::spawn(move || {
-                        let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
-                        let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
-                        let mut total = 0;
-                        let value = vec![0u8; ENTRY_SIZE];
-                        while let Ok(start) = rx.recv() {
-                            while start.elapsed().as_secs() < runtime {
-                                for _ in 0..100 {
-                                    let k = &keys[dist.sample(&mut rng) - 1][..];
-                                    if rng.gen_bool(0.5) {
-                                        // 50% reads
-                                        ds.get(k).unwrap().unwrap();
-                                    } else {
-                                        // 50% read-modify-write
-                                        let _existing = ds.get(k).unwrap().unwrap();
-                                        // Modify the value (in real workloads this would be an actual modification)
-                                        ds.upsert(k.to_vec(), &value, 0).unwrap();
-                                    }
-                                    total += 1;
+    let workers = threads;
+    println!("Running benchmark with {workers} threads...");
+    let threads = (0..workers)
+        .map(|_| std::sync::mpsc::channel::<std::time::Instant>())
+        .enumerate()
+        .map(|(id, (tx, rx))| {
+            let keys = keys.clone();
+            let ds = client.ds.clone();
+            (
+                std::thread::spawn(move || {
+                    let mut rng = rand_xoshiro::Xoshiro256Plus::seed_from_u64(id as u64);
+                    let dist = zipf::ZipfDistribution::new(keys.len(), ZIPF_EXP).unwrap();
+                    let mut total = 0;
+                    let value = vec![0u8; ENTRY_SIZE];
+                    while let Ok(start) = rx.recv() {
+                        while start.elapsed().as_secs() < runtime {
+                            for _ in 0..100 {
+                                let k = &keys[dist.sample(&mut rng) - 1][..];
+                                if rng.gen_bool(0.5) {
+                                    // 50% reads
+                                    ds.get(k).unwrap().unwrap();
+                                } else {
+                                    // 50% read-modify-write
+                                    let _existing = ds.get(k).unwrap().unwrap();
+                                    // Modify the value (in real workloads this would be an actual modification)
+                                    ds.upsert(k.to_vec(), &value, 0).unwrap();
                                 }
+                                total += 1;
                             }
                         }
-                        total
-                    }),
-                    tx,
-                )
-            })
-            .collect::<Vec<_>>();
-        client.db.read().drop_cache().unwrap();
-        let start = std::time::Instant::now();
-        for (_t, tx) in threads.iter() {
-            tx.send(start).unwrap();
-        }
-        let mut total = 0;
-        for (t, tx) in threads.into_iter() {
-            drop(tx);
-            total += t.join().unwrap();
-        }
-        let end = start.elapsed();
-        w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
-            .unwrap();
-        w.flush().unwrap();
-        println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
-        println!("          {} ns avg", end.as_nanos() / total);
+                    }
+                    total
+                }),
+                tx,
+            )
+        })
+        .collect::<Vec<_>>();
+    client.db.read().drop_cache().unwrap();
+    let start = std::time::Instant::now();
+    for (_t, tx) in threads.iter() {
+        tx.send(start).unwrap();
     }
+    let mut total = 0;
+    for (t, tx) in threads.into_iter() {
+        drop(tx);
+        total += t.join().unwrap();
+    }
+    let end = start.elapsed();
+    w.write_fmt(format_args!("{workers},{total},{}\n", end.as_nanos()))
+        .unwrap();
+    w.flush().unwrap();
+    println!("Achieved: {} ops/sec", total as f32 / end.as_secs_f32());
+    println!("          {} ns avg", end.as_nanos() / total);
 }
