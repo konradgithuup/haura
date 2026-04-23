@@ -108,13 +108,16 @@ impl OptimizerState {
     }
 }
 
-pub fn run_optimizer(dmu: Arc<RootDmu>, shared: SharedWeights, config: config::OptimizerConfig) {
+pub fn run_optimizer(
+    dmu: Arc<RootDmu>,
+    shared: SharedWeights,
+    config: config::OptimizerConfig,
+    rx: crossbeam_channel::Receiver<()>
+) {
     let mut state = OptimizerState::new(&config);
     let mut rng = rand::thread_rng();
 
-    loop {
-        thread::sleep(config.epoch_duration);
-
+    while rx.recv().is_ok() {
         let latency = state.calculate_epoch_latency(&dmu);
         if latency == 0.0 {
             continue;

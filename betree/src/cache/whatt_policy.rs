@@ -72,6 +72,7 @@ pub struct WhattPolicy<K> {
     write_weight: f32,
     shared_weights: SharedWeights,
     disk_id_extractor: fn(&K) -> Option<GlobalDiskId>,
+    optimizer_tx: crossbeam_channel::Sender<()>,
 }
 
 impl<K: Eq + Hash + Clone> WhattPolicy<K> {
@@ -80,6 +81,7 @@ impl<K: Eq + Hash + Clone> WhattPolicy<K> {
         cache_capacity_blocks: usize,
         shared_weights: SharedWeights,
         disk_id_extractor: fn(&K) -> Option<GlobalDiskId>,
+        optimizer_tx: crossbeam_channel::Sender<()>,
     ) -> Self {
         Self {
             history: HashMap::default(),
@@ -92,6 +94,7 @@ impl<K: Eq + Hash + Clone> WhattPolicy<K> {
             write_weight: DEFAULT_WRITE_WEIGHT,
             shared_weights,
             disk_id_extractor,
+            optimizer_tx,
         }
     }
 
@@ -240,6 +243,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> CachePolicy<K> for WhattPolic
             if self.eviction_count >= self.epoch_threshold {
                 self.t_now += 1;
                 self.eviction_count = 0;
+                let _ = self.optimizer_tx.try_send(());
             }
             None
         } else {
@@ -285,7 +289,8 @@ mod tests {
     #[test]
     fn test_whatt_behaves_like_watt_with_equal_weights() {
         let weights = SharedWeights::new();
-        let mut policy = WhattPolicy::new(100, weights, |_| None);
+        let (tx, _rx) = crossbeam_channel::bounded(1);
+        let mut policy = WhattPolicy::new(100, weights, |_| None, tx);
         policy.on_add(1);
         policy.on_add(2);
 
@@ -317,7 +322,8 @@ mod tests {
             Some(GlobalDiskId(*k as u16))
         }
 
-        let mut policy = WhattPolicy::new(100, weights, extractor);
+        let (tx, _rx) = crossbeam_channel::bounded(1);
+        let mut policy = WhattPolicy::new(100, weights, extractor, tx.clone());
         policy.on_add(1); // Maps to disk 1 -> weight 10.0
         policy.on_add(2); // Maps to disk 2 -> weight 0.1
 
@@ -342,7 +348,7 @@ mod tests {
         weights2.0[1].store(0.1_f32.to_bits(), Ordering::Release);
         weights2.0[2].store(10.0_f32.to_bits(), Ordering::Release);
 
-        let mut policy2 = WhattPolicy::new(100, weights2, extractor);
+        let mut policy2 = WhattPolicy::new(100, weights2, extractor, tx);
         policy2.on_add(1);
         policy2.on_add(2);
 
