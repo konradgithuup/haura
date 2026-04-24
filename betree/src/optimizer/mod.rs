@@ -7,11 +7,12 @@ use crate::storage_pool::{DiskOffset, GlobalDiskId};
 use rand::Rng;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::thread;
 
 /// Maximum number of devices supported by the 12-bit GlobalDiskId addressing scheme.
 // TODO: reduce number for this component because we usually don't need that many
 pub const MAX_DEVICES: usize = 4096;
+const INITIAL_TEMP: f32 = 100.0;
+const MIN_TEMP: f32 = 1.0;
 
 /// Shared weight buffer using a Sequence Lock for wait-free reads on the cache path.
 #[derive(Clone)]
@@ -46,9 +47,9 @@ pub struct OptimizerState {
 }
 
 impl OptimizerState {
-    pub fn new(config: &config::OptimizerConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            temperature: config.initial_temperature,
+            temperature: INITIAL_TEMP,
             prev_latency: f64::MAX,
             best_latency: f64::MAX,
             current_weights: [1.0; MAX_DEVICES],
@@ -114,7 +115,7 @@ pub fn run_optimizer(
     config: config::OptimizerConfig,
     rx: crossbeam_channel::Receiver<()>
 ) {
-    let mut state = OptimizerState::new(&config);
+    let mut state = OptimizerState::new();
     let mut rng = rand::thread_rng();
 
     while rx.recv().is_ok() {
@@ -128,9 +129,9 @@ pub fn run_optimizer(
             state.best_weights = state.current_weights;
         }
 
-        let abs_change = (latency - state.prev_latency).abs();
+        let rel_change = (latency - state.prev_latency).abs() / state.best_latency;
 
-        if abs_change < config.min_change && state.temperature < config.min_temperature {
+        if rel_change < config.min_change_ratio && state.temperature < MIN_TEMP {
             log::debug!(
                 "Optimizer: Hibernating (latency: {:.2}ns, temp: {:.2})",
                 latency,
@@ -138,7 +139,7 @@ pub fn run_optimizer(
             );
             state.current_weights = state.best_weights;
             state.prev_latency = state.best_latency;
-        } else if abs_change > config.max_idle && state.temperature < config.min_temperature {
+        } else if rel_change > config.max_idle_ratio && state.temperature < MIN_TEMP {
             log::debug!(
                 "Optimizer: Wake-up triggered by latency spike ({:.2}ns)",
                 latency
@@ -146,7 +147,7 @@ pub fn run_optimizer(
             state.prev_weights = state.current_weights;
             let src = state.current_weights;
             state.mutate(&src, config.mutation_spread);
-            state.temperature = config.initial_temperature;
+            state.temperature = INITIAL_TEMP;
         } else {
             let delta_l = latency - state.prev_latency;
             let prob = (-delta_l / state.temperature as f64).exp();
@@ -175,8 +176,10 @@ pub fn run_optimizer(
             }
         }
 
+        log::info!("Optimizer: Current Weights");
         for id in &state.active_devices {
             let i = id.as_u16() as usize;
+            log::info!("  Disk {}: {:.4}", i, state.current_weights[i]);
             shared.0[i].store(state.current_weights[i].to_bits(), Ordering::Release);
         }
     }
