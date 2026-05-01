@@ -260,6 +260,7 @@ impl DatabaseConfiguration {
     fn init_policy(
         &self,
         shared_weights: crate::optimizer::SharedWeights,
+        optimizer_tx: crossbeam_channel::Sender<()>,
     ) -> Box<dyn CachePolicy<ObjectKey<Generation>>> {
         let storage_kind = self
             .storage
@@ -289,6 +290,7 @@ impl DatabaseConfiguration {
                     ObjectKey::Unmodified { offset, .. } => Some(offset.class_disk_id()),
                     _ => None,
                 },
+                optimizer_tx,
             )),
             Policy::Random => Box::new(RandomCachePolicy::new()),
         }
@@ -519,7 +521,8 @@ impl Database {
         let handler = builder.new_handler(&spl);
 
         let shared_weights = crate::optimizer::SharedWeights::new();
-        let policy = builder.init_policy(shared_weights.clone());
+        let (opt_tx, opt_rx) = crossbeam_channel::bounded(1);
+        let policy = builder.init_policy(shared_weights.clone(),opt_tx);
         let mut dmu = builder.new_dmu(spl, handler, policy);
 
         if let Some(tx) = &dml_tx {
@@ -534,7 +537,7 @@ impl Database {
             let dmu_clone = Arc::clone(&dmu);
             let weights_clone = shared_weights;
             thread::spawn(move || {
-                crate::optimizer::run_optimizer(dmu_clone, weights_clone, opt_cfg);
+                crate::optimizer::run_optimizer(dmu_clone, weights_clone, opt_cfg, opt_rx);
             });
         }
 
